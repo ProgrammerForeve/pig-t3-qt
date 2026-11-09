@@ -1,0 +1,5 @@
+include PIG_T3/logo.png
+include PIG_T3/icon.png
+include README.md
+include LICENSE
+recursive-include PIG_T3 *.png

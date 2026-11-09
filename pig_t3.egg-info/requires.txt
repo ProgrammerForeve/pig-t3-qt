@@ -1,0 +1,7 @@
+requests
+radon
+pylint
+vulture
+bandit
+Pillow
+majorchik-api

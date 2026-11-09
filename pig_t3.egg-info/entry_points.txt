@@ -1,0 +1,2 @@
+[console_scripts]
+pig-t3 = PIG_T3.main:main
