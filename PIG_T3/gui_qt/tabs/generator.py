@@ -4,10 +4,10 @@
 - ``GeneratorTab(settings: dict)``
 - ``collect_settings() -> dict``
 - ``commit_recent_projects()`` — recent_projects + completer refresh
-- ``refresh_tree()`` — сканировать и пересобрать дерево
+- ``refresh_tree()`` — сканировать и пересобрать дерево (state сохраняется
+  между вызовами, если root не изменился)
 - ``set_tree_data(files)`` — пересобрать дерево из явного списка (тесты)
 - ``capture_tree_state() -> dict``
-- ``restore_tree_state_from_settings()``
 - ``settings_changed`` (Signal)
 """
 
@@ -46,6 +46,7 @@ from ...utils.clipboard import copy_file_to_clipboard_windows
 from ..dialogs.optimize_dialog import OptimizeDialog
 from ..models.project_tree import ProjectTreeModel
 from ..widgets.project_tree_view import ProjectTreeView
+from ..widgets.recent_menu import RecentProjectsMenu
 from ..workers.generate_worker import GenerateWorker
 from ..workers.llm_wrappers import make_llm_client
 from ..workers.optimize_worker import OptimizeWorker
@@ -111,6 +112,7 @@ class GeneratorTab(QWidget):
         self._populate(settings)
         self._connect_signals()
         self.refresh_tree()
+        self._refresh_recent_menu()
 
         # Restore unchecked synchronously — set_unchecked_paths only
         # emits dataChanged, no persistent indices, safe right after
@@ -141,11 +143,18 @@ class GeneratorTab(QWidget):
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("Путь к проекту…")
         self._setup_completer()
+        self.btn_recent = QToolButton()
+        self.btn_recent.setText("📁")
+        self.btn_recent.setToolTip("Недавние проекты")
+        self.btn_recent.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.recent_menu = RecentProjectsMenu(self)
+        self.btn_recent.setMenu(self.recent_menu)
         self.btn_browse = QPushButton("Обзор…")
         self.btn_auto = QPushButton("Авто")
         path_layout.addWidget(self.path_edit, 0, 0)
-        path_layout.addWidget(self.btn_browse, 0, 1)
-        path_layout.addWidget(self.btn_auto, 0, 2)
+        path_layout.addWidget(self.btn_recent, 0, 1)
+        path_layout.addWidget(self.btn_browse, 0, 2)
+        path_layout.addWidget(self.btn_auto, 0, 3)
         path_layout.setColumnStretch(0, 1)
         layout.addWidget(path_row)
 
@@ -269,6 +278,8 @@ class GeneratorTab(QWidget):
 
     def _connect_signals(self) -> None:
         self.btn_browse.clicked.connect(self.browse_folder)
+        self.recent_menu.project_selected.connect(self._on_recent_selected)
+        self.recent_menu.recent_cleared.connect(self._on_recent_cleared)
         self.btn_auto.clicked.connect(self.auto_set_folder)
         self.btn_refresh_tree.clicked.connect(self.refresh_tree)
         self.btn_optimize.clicked.connect(self.open_optimization_dialog)
@@ -522,6 +533,7 @@ class GeneratorTab(QWidget):
         recent = recent[:_RECENT_PROJECTS_LIMIT]
         self.settings["recent_projects"] = recent
         self._completer_model.setStringList(recent)
+        self._refresh_recent_menu()
 
     def capture_tree_state(self) -> dict:
         """Снимок ui_tree_expanded / ui_tree_unchecked для сохранения."""
@@ -811,6 +823,19 @@ class GeneratorTab(QWidget):
         self._detach_worker_from_thread(worker)
 
     # ---------- Handlers ----------
+
+    def _refresh_recent_menu(self) -> None:
+        paths = self.settings.get("recent_projects", [])
+        self.recent_menu.update_projects(paths)
+
+    def _on_recent_selected(self, path: str) -> None:
+        self.path_edit.setText(path)
+
+    def _on_recent_cleared(self) -> None:
+        self.settings["recent_projects"] = []
+        self._completer_model.setStringList([])
+        self._refresh_recent_menu()
+        self.settings_changed.emit()
 
     def browse_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Выберите папку проекта", self.path_edit.text())

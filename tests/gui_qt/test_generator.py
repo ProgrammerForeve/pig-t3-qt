@@ -922,3 +922,93 @@ def test_optimize_dialog_accepts_starts_worker(qtbot, tmp_path, monkeypatch):
     assert captured.get("task") == "test task"
     assert captured.get("limit_tokens") == 5000
     tab.stop_optimization()
+
+
+# ---------- B4: recent projects menu ----------
+
+
+def test_btn_recent_exists(settings, qtbot):
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    assert hasattr(tab, "btn_recent")
+    assert hasattr(tab, "recent_menu")
+
+
+def test_recent_menu_populated_from_settings(qtbot, tmp_path):
+
+    d1 = tmp_path / "a"
+    d2 = tmp_path / "b"
+    d1.mkdir()
+    d2.mkdir()
+    tab = GeneratorTab(
+        {
+            "root_folder": str(d1),
+            "extensions": ".py",
+            "ignore_list": "",
+            "recent_projects": [str(d1), str(d2)],
+        }
+    )
+    qtbot.addWidget(tab)
+    texts = [a.text() for a in tab.recent_menu.actions() if a.text()]
+    assert str(d1) in texts
+    assert str(d2) in texts
+
+
+def test_recent_selected_sets_path(qtbot, tmp_path):
+    d = tmp_path / "proj"
+    d.mkdir()
+    tab = GeneratorTab(
+        {
+            "root_folder": str(tmp_path),
+            "extensions": ".py",
+            "ignore_list": "",
+            "recent_projects": [str(d)],
+        }
+    )
+    qtbot.addWidget(tab)
+    tab._on_recent_selected(str(d))
+    assert tab.path_edit.text() == str(d)
+
+
+def test_recent_cleared_empties_list(qtbot, tmp_path):
+    d = tmp_path / "proj"
+    d.mkdir()
+    tab = GeneratorTab(
+        {
+            "root_folder": str(tmp_path),
+            "extensions": ".py",
+            "ignore_list": "",
+            "recent_projects": [str(d)],
+        }
+    )
+    qtbot.addWidget(tab)
+    tab._on_recent_cleared()
+    assert tab.settings["recent_projects"] == []
+    assert tab._completer_model.stringList() == []
+
+
+def test_commit_recent_updates_menu(qtbot, tmp_path):
+    d1 = tmp_path / "old"
+    d2 = tmp_path / "new"
+    d1.mkdir()
+    d2.mkdir()
+    tab = GeneratorTab(
+        {
+            "root_folder": str(d1),
+            "extensions": ".py",
+            "ignore_list": "",
+            "recent_projects": [str(d1)],
+        }
+    )
+    qtbot.addWidget(tab)
+    tab.path_edit.setText(str(d2))
+    tab.commit_recent_projects()
+    texts = [a.text() for a in tab.recent_menu.actions() if a.text()]
+    assert str(d2) in texts
+    # Первый в списке
+    real_paths = [
+        a.text()
+        for a in tab.recent_menu.actions()
+        if a.text() and "Очистить" not in a.text() and "пусто" not in a.text().lower()
+    ]
+    assert real_paths[0] == str(d2)
