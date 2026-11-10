@@ -53,7 +53,19 @@ if sys.platform == "win32":
             ctypes.windll.user32.SetProcessDPIAware()
 
 
+def _get_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("pig-t3")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def main():
+    if "--version" in sys.argv or "-V" in sys.argv:
+        print(f"PIG-T3 {_get_version()}")
+        return
     from .gui_qt.app import run_gui_qt
 
     sys.exit(run_gui_qt())
