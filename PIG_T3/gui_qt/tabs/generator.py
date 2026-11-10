@@ -1,15 +1,12 @@
-"""Вкладка «Генератор» — каркас (T-101) + опции (T-102) + completer (T-103).
-
-Содержит поля ввода пути проекта, расширений, ignore-листа, имени отчёта,
-группу чекбоксов с опциями генерации и QCompleter на пути проекта
-(недавние проекты). Не выполняет генерацию — это делает воркер (T-107).
+"""Вкладка «Генератор» — каркас (T-101..T-103) + дерево проекта (T-105).
 
 Публичный интерфейс:
-- ``GeneratorTab(settings: dict)`` — конструктор, читает значения из ``settings``
-- ``collect_settings() -> dict`` — собрать текущие значения в формате конфига
-- ``commit_recent_projects()`` — добавить текущий путь в recent_projects
-  (dedupe, cap 10), обновить completer; вызывается из MainWindow.closeEvent
-- ``settings_changed`` (Signal) — испускается при любом изменении поля/чекбокса
+- ``GeneratorTab(settings: dict)``
+- ``collect_settings() -> dict``
+- ``commit_recent_projects()`` — recent_projects + completer refresh
+- ``refresh_tree()`` — сканировать и пересобрать дерево
+- ``set_tree_data(files)`` — пересобрать дерево из явного списка (тесты)
+- ``settings_changed`` (Signal)
 """
 
 from __future__ import annotations
@@ -17,13 +14,14 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QStringListModel, Qt, Signal
+from PySide6.QtCore import QStringListModel, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QCompleter,
     QFileDialog,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -31,7 +29,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...core.analyzer import ProjectAnalyzer
+from ..models.project_tree import ProjectTreeModel
+from ..widgets.project_tree_view import ProjectTreeView
+
 _RECENT_PROJECTS_LIMIT = 10
+_TREE_REFRESH_DELAY_MS = 600
 
 
 class GeneratorTab(QWidget):
@@ -42,9 +45,17 @@ class GeneratorTab(QWidget):
     def __init__(self, settings: dict):
         super().__init__()
         self.settings = settings
+        self.analyzer = ProjectAnalyzer()
+
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(_TREE_REFRESH_DELAY_MS)
+        self._refresh_timer.timeout.connect(self.refresh_tree)
+
         self._setup_ui()
         self._populate(settings)
         self._connect_signals()
+        self.refresh_tree()
 
     # ---------- UI ----------
 
@@ -104,7 +115,18 @@ class GeneratorTab(QWidget):
             options_layout.addWidget(cb)
         layout.addWidget(options_group)
 
-        layout.addStretch(1)
+        # --- Дерево проекта (T-105) ---
+        tree_header = QHBoxLayout()
+        tree_header.addWidget(QLabel("Структура проекта:"))
+        tree_header.addStretch(1)
+        self.btn_refresh_tree = QPushButton("🔄 Обновить")
+        tree_header.addWidget(self.btn_refresh_tree)
+        layout.addLayout(tree_header)
+
+        self.tree_model = ProjectTreeModel("", [])
+        self.tree_view = ProjectTreeView()
+        self.tree_view.setModel(self.tree_model)
+        layout.addWidget(self.tree_view, 1)
 
     def _setup_completer(self) -> None:
         recent = list(self.settings.get("recent_projects", []))
@@ -138,12 +160,17 @@ class GeneratorTab(QWidget):
     def _connect_signals(self) -> None:
         self.btn_browse.clicked.connect(self.browse_folder)
         self.btn_auto.clicked.connect(self.auto_set_folder)
+        self.btn_refresh_tree.clicked.connect(self.refresh_tree)
 
         for edit in (self.path_edit, self.ext_edit, self.ignore_edit, self.output_edit):
-            edit.textChanged.connect(self.settings_changed)
+            edit.textChanged.connect(self._on_field_changed)
 
         for cb in self._checkboxes():
             cb.toggled.connect(self._on_checkbox_toggled)
+
+    def _on_field_changed(self, _text: str) -> None:
+        self.settings_changed.emit()
+        self._refresh_timer.start()
 
     def _on_checkbox_toggled(self, _checked: bool) -> None:
         self.settings_changed.emit()
@@ -165,11 +192,6 @@ class GeneratorTab(QWidget):
         }
 
     def commit_recent_projects(self) -> None:
-        """Добавляет текущий путь в начало recent_projects.
-
-        Dedupe + cap _RECENT_PROJECTS_LIMIT. Обновляет completer.
-        Не делает ничего для пустой/whitespace-only строки.
-        """
         current = self.path_edit.text().strip()
         if not current:
             return
@@ -179,6 +201,43 @@ class GeneratorTab(QWidget):
         self.settings["recent_projects"] = recent
         self._completer_model.setStringList(recent)
 
+    def refresh_tree(self) -> None:
+        """Сканирует текущий root_folder и пересобирает дерево."""
+        root = self.path_edit.text().strip()
+        if not root or not os.path.isdir(root):
+            self.tree_model.reset_data([], root or os.getcwd())
+            return
+
+        extensions_clean = ", ".join(x.strip() for x in self.ext_edit.text().split(",") if x.strip())
+        ignore_clean = ", ".join(x.strip() for x in self.ignore_edit.text().split(",") if x.strip())
+        # ProjectAnalyzer.scan_directory splits config['ignore_list'] by
+        # comma and treats every entry as a substring filter. An empty
+        # result would become [''] after split, and '' in <any path> is
+        # True — everything gets filtered out. Use \x00 (impossible in a
+        # filesystem path) as sentinel so nothing matches.
+        if not ignore_clean:
+            ignore_clean = "\x00"
+
+        cfg = self.settings.copy()
+        cfg.update(
+            {
+                "root_folder": root,
+                "extensions": extensions_clean,
+                "ignore_list": ignore_clean,
+                "strict_mode": self.settings.get("strict_mode", False),
+            }
+        )
+        try:
+            files, _empty = self.analyzer.scan_directory(cfg)
+        except Exception as e:
+            print(f"Tree scan error: {e}")
+            files = []
+        self.tree_model.reset_data(files, root)
+
+    def set_tree_data(self, files: list[tuple[str, str]]) -> None:
+        """Пересобрать дерево из явного списка (для тестов/внешних вызовов)."""
+        self.tree_model.reset_data(files, self.path_edit.text())
+
     # ---------- Handlers ----------
 
     def browse_folder(self) -> None:
@@ -187,10 +246,8 @@ class GeneratorTab(QWidget):
             self.path_edit.setText(folder)
 
     def auto_set_folder(self) -> None:
-        """Устанавливает путь по эвристике: frozen → рядом с .exe, иначе → корень репо."""
         if getattr(sys, "frozen", False):
             parent_dir = os.path.dirname(sys.executable)
         else:
-            # PIG_T3/gui_qt/tabs/generator.py → ../../.. = корень репозитория
             parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         self.path_edit.setText(parent_dir)

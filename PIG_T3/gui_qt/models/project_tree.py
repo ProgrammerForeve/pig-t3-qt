@@ -303,3 +303,20 @@ class ProjectTreeModel(QAbstractItemModel):
                 node.check_state = Qt.CheckState.Unchecked
         self._recompute_all(self._root)
         self._notify_all()
+
+    def reset_data(self, files: list[tuple[str, str]], root_path: str) -> None:
+        """Полностью пересобрать дерево из нового списка файлов.
+
+        Состояние чекбоксов сбрасывается в Checked (персистентность —
+        задача T-106).
+        """
+        self.beginResetModel()
+        if root_path:
+            self.root_path = os.path.abspath(root_path)
+            self._root = TreeNode(name="", path=self.root_path, is_dir=True)
+            self._build_tree(files)
+            self._recompute_all(self._root)
+        else:
+            self.root_path = ""
+            self._root = TreeNode(name="", path="/", is_dir=True)
+        self.endResetModel()

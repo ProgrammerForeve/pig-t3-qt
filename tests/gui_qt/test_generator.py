@@ -245,3 +245,66 @@ def test_main_window_close_commits_recent(qtbot, tmp_path, monkeypatch):
 
     saved = json.loads(cfg_path.read_text())
     assert saved["recent_projects"][0] == "/chosen"
+
+
+# ---------- T-105: дерево проекта ----------
+
+
+def test_tree_view_and_model_exist(settings, qtbot):
+    from PIG_T3.gui_qt.models.project_tree import ProjectTreeModel
+    from PIG_T3.gui_qt.widgets.project_tree_view import ProjectTreeView
+
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    assert hasattr(tab, "tree_view")
+    assert hasattr(tab, "tree_model")
+    assert isinstance(tab.tree_view, ProjectTreeView)
+    assert isinstance(tab.tree_model, ProjectTreeModel)
+    assert tab.tree_view.model() is tab.tree_model
+
+
+def test_tree_populated_from_scan_on_init(qtbot, tmp_path):
+    (tmp_path / "a.py").write_text("x = 1")
+    (tmp_path / "b.md").write_text("# hi")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "c.py").write_text("y = 2")
+
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py, .md",
+        "ignore_list": "",
+        "output_name": "ctx",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    from PySide6.QtCore import QModelIndex
+
+    assert tab.tree_model.rowCount(QModelIndex()) == 3  # a.py, b.md, sub
+
+
+def test_set_tree_data_manual(settings, qtbot, tmp_path):
+    from PySide6.QtCore import QModelIndex
+
+    settings["root_folder"] = str(tmp_path)
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.set_tree_data([(str(tmp_path / "x.py"), ".py")])
+    assert tab.tree_model.rowCount(QModelIndex()) == 1
+
+
+def test_tree_ignores_empty_ignore_entries(qtbot, tmp_path):
+    """Пустые элементы в ignore-листе не должны блокировать весь скан."""
+    (tmp_path / "a.py").write_text("x = 1")
+
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": " , , , ",  # только пробелы и запятые
+        "output_name": "ctx",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    from PySide6.QtCore import QModelIndex
+
+    assert tab.tree_model.rowCount(QModelIndex()) == 1
