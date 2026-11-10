@@ -45,6 +45,41 @@ CRITICAL INSTRUCTIONS:
 {context}"""
 
 
+def apply_mark_to_step(step: dict, llm_response: str) -> bool:
+    """Применить mark_step_completed из ответа LLM к step.
+
+    Возвращает True, если хотя бы один mark найден. Используется
+    и воркером (полный план), и PlanTab (capture mode + ручной
+    apply после diff).
+    """
+    try:
+        cleaned = clean_json_text(llm_response)
+        actions = json.loads(cleaned)
+    except Exception:
+        return False
+    if not isinstance(actions, list):
+        return False
+    found = False
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if action.get("action") != "mark_step_completed":
+            continue
+        if "completed" in action:
+            step["completed"] = bool(action["completed"])
+        else:
+            step["completed"] = True
+        if action.get("explanation"):
+            step["report"] = str(action["explanation"])
+        if "append_description" in action:
+            append = str(action["append_description"])
+            if append:
+                existing = step.get("description", "")
+                step["description"] = (existing + "\n" + append) if existing else append
+        found = True
+    return found
+
+
 class PlanStepWorker(QObject):
     progress = Signal(int, str)
     done = Signal(dict, str)  # (updated step, apply log)
@@ -64,6 +99,7 @@ class PlanStepWorker(QObject):
         context_builder: Callable[[str, str, int], str] | None = None,
         apply_func: Callable[[str, str], str] | None = None,
         max_retries: int = 2,
+        capture_llm_text: bool = False,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
@@ -78,6 +114,7 @@ class PlanStepWorker(QObject):
         self._context_builder = context_builder
         self._apply_func = apply_func or apply_llm_changes
         self._max_retries = max(0, max_retries)
+        self._capture_llm_text = capture_llm_text
 
     # ---------- Internals ----------
 
@@ -139,32 +176,7 @@ class PlanStepWorker(QObject):
         )
 
     def _apply_mark_to_step(self, llm_response: str) -> bool:
-        try:
-            cleaned = clean_json_text(llm_response)
-            actions = json.loads(cleaned)
-        except Exception:
-            return False
-        if not isinstance(actions, list):
-            return False
-        found = False
-        for action in actions:
-            if not isinstance(action, dict):
-                continue
-            if action.get("action") != "mark_step_completed":
-                continue
-            if "completed" in action:
-                self._step["completed"] = bool(action["completed"])
-            else:
-                self._step["completed"] = True
-            if action.get("explanation"):
-                self._step["report"] = str(action["explanation"])
-            if "append_description" in action:
-                append = str(action["append_description"])
-                if append:
-                    existing = self._step.get("description", "")
-                    self._step["description"] = (existing + "\n" + append) if existing else append
-            found = True
-        return found
+        return apply_mark_to_step(self._step, llm_response)
 
     def _sleep_cancellable(self, seconds: float) -> bool:
         """Спать секунды, но проверять interruption каждые 100мс."""
@@ -213,6 +225,14 @@ class PlanStepWorker(QObject):
                 parsed = json.loads(cleaned)
                 if not isinstance(parsed, list):
                     raise ValueError("JSON должен быть списком операций")
+
+                if self._capture_llm_text:
+                    # Не применяем: PlanTab покажет diff, применит
+                    # после подтверждения. Отдаём llm_text через step.
+                    self._step["_pending_llm_text"] = llm_response
+                    self.progress.emit(100, "Готов к просмотру")
+                    self.done.emit(self._step, "PREVIEW_PENDING")
+                    return
 
                 self.progress.emit(80, "Применение изменений...")
                 apply_log = self._apply_func(llm_response, self._root)

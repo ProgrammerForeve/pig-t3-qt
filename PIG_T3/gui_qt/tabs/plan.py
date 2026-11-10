@@ -39,10 +39,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...core.patcher import apply_llm_changes
 from ...core.plan_validator import validate_plan
+from ..dialogs.diff_dialog import DiffDialog
 from ..dialogs.new_plan_dialog import NewPlanDialog
+from ..workers.diff_preview import compute_diffs
 from ..workers.generate_plan_worker import GeneratePlanWorker
-from ..workers.plan_step_worker import PlanStepWorker
+from ..workers.plan_step_worker import PlanStepWorker, apply_mark_to_step
 
 _SAVE_DEBOUNCE_MS = 500
 _PLAN_HISTORY_LIMIT = 10
@@ -50,6 +53,10 @@ _PLAN_HISTORY_LIMIT = 10
 
 def _show_warning(parent, title: str, text: str) -> None:
     QMessageBox.warning(parent, title, text)
+
+
+def _show_info(parent, title: str, text: str) -> None:
+    QMessageBox.information(parent, title, text)
 
 
 def _show_error(parent, title: str, text: str) -> None:
@@ -615,6 +622,7 @@ class PlanTab(QWidget):
         self.status_label.setText(f"Выполнение шага: {step.get('title', '')}")
 
         limit = int(self.settings.get("plan_step_limit_tokens", 15000))
+        auto_apply = self.cb_auto_apply.isChecked() or self._full_plan_running
         self._exec_worker = PlanStepWorker(
             step=step,
             plan_data=self.plan_data,
@@ -623,6 +631,7 @@ class PlanTab(QWidget):
             settings=self.settings,
             limit_tokens=limit,
             parent_widget=self,
+            capture_llm_text=not auto_apply,
         )
         self._exec_thread = QThread(self)
         self._exec_worker.moveToThread(self._exec_thread)
@@ -644,6 +653,12 @@ class PlanTab(QWidget):
         self.status_label.setText(f"{msg} ({percent}%)")
 
     def _on_exec_done(self, step: dict, log: str) -> None:
+        pending = step.pop("_pending_llm_text", None)
+        # capture mode: применить после diff-подтверждения
+        if pending and not self._apply_pending_with_diff(step, pending):
+            self.status_label.setText("⏹ Изменения не применены")
+            return
+
         idx = -1
         for i, s in enumerate(self.plan_data):
             if s.get("id") == step.get("id"):
@@ -663,6 +678,38 @@ class PlanTab(QWidget):
                 self._finish_full_plan("отменён")
             else:
                 QTimer.singleShot(0, self._run_next_full_plan_step)
+
+    def _apply_pending_with_diff(self, step: dict, llm_text: str) -> bool:
+        """Показать diff, при подтверждении применить. True если применено."""
+        try:
+            diffs = compute_diffs(llm_text, self._current_path)
+        except Exception as e:
+            _show_error(self, "Ошибка предпросмотра", str(e))
+            return False
+
+        if not diffs:
+            _show_info(self, "Просмотр", "Изменений нет.")
+            step["status"] = "pending"
+            step["report"] = "Пустой патч от LLM"
+            return True
+
+        dlg = DiffDialog(diffs, parent=self)
+        if dlg.exec() != DiffDialog.DialogCode.Accepted:
+            step["status"] = "pending"
+            step["report"] = "Не применено (отменено пользователем)"
+            return False
+
+        try:
+            apply_log = apply_llm_changes(llm_text, self._current_path)
+        except Exception as e:
+            _show_error(self, "Ошибка применения", str(e))
+            return False
+
+        has_mark = apply_mark_to_step(step, llm_text)
+        step["status"] = "completed" if has_mark else "pending"
+        if not step.get("report"):
+            step["report"] = apply_log
+        return True
 
     def _on_exec_error(self, step: dict, msg: str) -> None:
         idx = -1
