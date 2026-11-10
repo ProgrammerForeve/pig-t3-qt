@@ -27,7 +27,9 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.patcher import clean_json_text
+from ..dialogs.diff_dialog import DiffDialog
 from ..workers.apply_worker import ApplyWorker, UndoRedoWorker
+from ..workers.diff_preview import compute_diffs
 from ..workers.ollama_models_worker import (
     OllamaModelsWorker,
     cache_is_fresh,
@@ -135,9 +137,11 @@ class EditorTab(QWidget):
         btn_row = QHBoxLayout()
         self.btn_paste = QPushButton("📋 Вставить")
         self.btn_validate = QPushButton("🔍 Проверить / Форматировать")
+        self.btn_preview = QPushButton("👁 Просмотр изменений")
         self.btn_apply = QPushButton("ПРИМЕНИТЬ ИЗМЕНЕНИЯ")
         btn_row.addWidget(self.btn_paste)
         btn_row.addWidget(self.btn_validate)
+        btn_row.addWidget(self.btn_preview)
         btn_row.addWidget(self.btn_apply, 1)
         layout.addLayout(btn_row)
 
@@ -214,6 +218,7 @@ class EditorTab(QWidget):
     def _connect_signals(self) -> None:
         self.btn_paste.clicked.connect(self._on_paste)
         self.btn_validate.clicked.connect(self._on_validate)
+        self.btn_preview.clicked.connect(self._on_preview)
         self.btn_apply.clicked.connect(self._on_apply)
         self.btn_undo.clicked.connect(self._on_undo)
         self.btn_redo.clicked.connect(self._on_redo)
@@ -229,6 +234,26 @@ class EditorTab(QWidget):
         self._on_validate()
 
     # ---------- Handlers ----------
+    def _on_preview(self) -> None:
+        """Показать diff перед применением. Если пользователь нажал
+        «Применить» в диалоге — запускаем _on_apply."""
+        if not self._on_validate():
+            return
+        if not self._current_path or not os.path.isdir(self._current_path):
+            _show_error(self, "Ошибка", "Папка проекта не существует.")
+            return
+        raw = self.editor_text.toPlainText().strip()
+        try:
+            diffs = compute_diffs(raw, self._current_path)
+        except Exception as e:
+            _show_error(self, "Ошибка предпросмотра", str(e))
+            return
+        if not diffs:
+            _show_info(self, "Просмотр", "Изменений нет.")
+            return
+        dlg = DiffDialog(diffs, parent=self)
+        if dlg.exec() == DiffDialog.DialogCode.Accepted:
+            self._on_apply()
 
     def _on_paste(self) -> None:
         from PySide6.QtWidgets import QApplication
