@@ -62,6 +62,35 @@ hiddenimports = [
 # ---------- Excludes ----------
 # Не тащим в бандл legacy Tkinter-код и тяжёлые dev-зависимости.
 excludes = [
+    # Тестовый фреймворк (транзитивно через pylint)
+    "_pytest",
+    "_pytest.assertion",
+    "_pytest.compat",
+    "_pytest.config",
+    "hypothesis",
+    # pylint/bandit используют rich для TUI — в CLI-режиме не нужен
+    "rich",
+    "markdown_it",
+    "mdurl",
+    "linkify_it",
+    "pygments",       # используется только rich + нашим кодом нет
+    # astroid — уже зависит от typing_extensions, IPython опционален
+    "IPython",
+    "ipython",
+    "ipywidgets",
+    "jupyter",
+    "jupyter_client",
+    "jupyter_core",
+    "notebook",
+    "nbformat",
+    "nbconvert",
+    # setuptools vendor — PyInstaller сам подтягивает
+    "setuptools._vendor",
+    "pkg_resources._vendor",
+    # PIL: PIG-T3 рендерит иконки через Qt, PIL был в старом Tkinter
+    "PIL",
+    "Pillow",
+    "olefile",
     "tkinter",
     "test",
     "unittest",
