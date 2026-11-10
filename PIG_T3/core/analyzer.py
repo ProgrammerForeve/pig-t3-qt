@@ -132,7 +132,7 @@ class ProjectAnalyzer:
         ignore_list = [i.strip() for i in config['ignore_list'].split(',')]
         strict_mode = config['strict_mode']
         ignore_self = config.get("ignore_self", False)
-        
+
         # Prepare forbidden paths
         forbidden_paths = set()
         if ignore_self:
@@ -142,7 +142,7 @@ class ProjectAnalyzer:
             if base_name.lower().endswith('.txt') or base_name.lower().endswith('.md'):
                 base_name = os.path.splitext(base_name)[0]
             output_file = os.path.join(root_folder, base_name + final_ext)
-            
+
             forbidden_paths.add(os.path.normcase(os.path.abspath(output_file)))
             if config.get("config_path_abs"):
                 forbidden_paths.add(os.path.normcase(os.path.abspath(config['config_path_abs'])))
@@ -160,28 +160,28 @@ class ProjectAnalyzer:
             rel_root = os.path.relpath(root, root_folder)
             if rel_root != "." and any(ign in rel_root.split(os.sep) for ign in ignore_list):
                 continue
-            
+
             has_valid_files = False
             for file in files:
                 full_path = os.path.join(root, file)
                 norm_path = os.path.normcase(os.path.abspath(full_path))
                 if norm_path in forbidden_paths: continue
                 if any(ign in file for ign in ignore_list): continue
-                
+
                 matched_ext = None
                 for ext_check in extensions:
                     if file.endswith(ext_check):
                         matched_ext = ext_check
                         break
-                
+
                 if matched_ext:
                     if strict_mode and '.' in file[:-len(matched_ext)]: continue
                     paths_to_process.append((full_path, matched_ext))
                     has_valid_files = True
-            
+
             if not has_valid_files and not dirs and rel_root != ".":
                 empty_dirs.append(rel_root.replace("\\", "/"))
-        
+
         return paths_to_process, empty_dirs
 
     def process(self, config, progress_callback=None, cancel_callback=None):
@@ -191,7 +191,7 @@ class ProjectAnalyzer:
         add_edit_prompt = config.get("add_edit_prompt", False)
         line_numbers = config.get("line_numbers", False)
         use_sharp_indent = config.get("use_sharp_indent", False)
-        
+
         # Optional: List of specifically allowed files (from GUI checkboxes)
         # If None/Empty, assume all found files are allowed.
         # Изменено на Blacklist: список явно исключенных файлов (из GUI)
@@ -218,7 +218,7 @@ class ProjectAnalyzer:
             if cancel_callback and cancel_callback():
                 return None
             rel_path = os.path.relpath(full_path, root_folder).replace("\\", "/")
-            
+
             # Check if we should include CONTENT of this file
             # If allowed_paths_abs is set, we check if full_path is in it.
             include_content = True
@@ -239,7 +239,7 @@ class ProjectAnalyzer:
                         for num, line in enumerate(content.splitlines(), 1):
                             numbered_content.append(f"{num:4d} | {line}")
                         content = "\n".join(numbered_content)
-                    
+
                     found_paths.append(rel_path)
                     files_data.append({'path': rel_path, 'content': content, 'lines': lines_count, 'ext': ext, 'included': True})
                     total_lines += lines_count
@@ -248,17 +248,17 @@ class ProjectAnalyzer:
                     dir_name = os.path.dirname(rel_path)
                     _, real_ext = os.path.splitext(rel_path)
                     key = (dir_name, real_ext.lower())
-                    
+
                     if key not in excluded_files_grouped:
                         excluded_files_grouped[key] = {'paths':[], 'count': 0}
-                    
+
                     if excluded_files_grouped[key]['count'] < 10:
                         excluded_files_grouped[key]['paths'].append(rel_path)
                     excluded_files_grouped[key]['count'] += 1
 
             except Exception as e:
                 print(f"Ошибка чтения {rel_path}: {e}")
-            
+
             if progress_callback:
                 progress_callback(i + 1, total_files_count)
 
@@ -267,7 +267,7 @@ class ProjectAnalyzer:
             paths = group_data['paths']
             total_excluded = group_data['count']
             paths.sort()
-            
+
             found_paths.extend(paths)
             if total_excluded > 10:
                 more_count = total_excluded - 10

@@ -39,12 +39,12 @@ Pay special attention to the SCREENING and BALANCING of brackets, quotation mark
 Output ONLY fixed JSON
 Do NOT DELETE/CHANGE/ADD any INFORMATION or FIELDS!
 {malformed_text}'''
-        
+
         if self.debug_prompt:
             print("Prompt:\n-----------------------------------------------------------\n" + prompt + "\n-----------------------------------------------------------\n")
 
         url = "http://localhost:11434/api/chat"
-        
+
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -87,7 +87,7 @@ Do NOT DELETE/CHANGE/ADD any INFORMATION or FIELDS!
 
                     # --- Обработка Content ---
                     current_content_chunk = msg.get('content', '')
-                    
+
                     # Обработка tool_calls (на всякий случай, хотя здесь json format)
                     if 'tool_calls' in msg and msg['tool_calls']:
                         for tool in msg['tool_calls']:
@@ -117,7 +117,7 @@ Do NOT DELETE/CHANGE/ADD any INFORMATION or FIELDS!
                 print("\n-----------------------------------------------------------\n")
 
             final_text = "".join(collected_content).strip()
-            
+
             # Автоматическая очистка Markdown обертки, если модель вернула ```json ... ```
             md_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', final_text, re.IGNORECASE)
             if md_match:

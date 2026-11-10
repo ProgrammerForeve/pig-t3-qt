@@ -1,0 +1,28 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=5000"]
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^(PIG_T3/gui_qt|PIG_T3/config\.py|tests)/
+      - id: ruff-format
+        files: ^(PIG_T3/gui_qt|PIG_T3/config\.py|tests)/
+
+  - repo: local
+    hooks:
+      - id: pytest-fast
+        name: pytest (fast)
+        entry: uv run pytest tests/ -q --timeout=30 -x
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

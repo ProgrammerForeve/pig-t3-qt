@@ -241,7 +241,7 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                 # Сортируем операции замены строк и вставки с конца, чтобы не сбить индексы
                 # Группируем операции, завязанные на номера строк
                 line_ops = [op for op in operations if op.get('type') in ('replace_lines', 'insert_after_line')]
-                
+
                 def get_op_line(op):
                     if op.get('type') == 'replace_lines':
                         return op.get('start', 0)
@@ -256,7 +256,7 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                     op_type = op.get('type')
                     new_content = op.get('content', "")
                     if new_content is None: new_content = ""
-                    
+
                     # Подготовка контента (добавление переноса строки если нет)
                     new_lines_list = new_content.splitlines(keepends=True)
                     if new_lines_list and not new_lines_list[-1].endswith(('\n', '\r')):
@@ -290,12 +290,12 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                         lines[idx_start:idx_end] = new_lines_list
                         file_changed = True
                         changes_log.append(f"✏️ Line Patch {rel_path}: строки {start}-{end}")
-                    
+
                     # --- LOGIC: INSERT AFTER LINE ---
                     elif op_type == 'insert_after_line':
                         line_idx = op.get('line')
                         if line_idx is None: continue
-                        
+
                         # Индекс списка (0-based) = Номер строки (1-based)
                         # Пример: Вставить после строки 1. Список индексы: 0. insert(1, ...) вставит после 0.
                         insert_at = max(0, line_idx)

@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: PIG-T3-linux
+            binary_path: dist/PIG-T3
+          - os: windows-latest
+            artifact_name: PIG-T3-windows
+            binary_path: dist/PIG-T3.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.10
+
+      - name: Install system deps (Linux Qt)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0
+
+      - name: Install project deps
+        run: uv sync --extra dev
+
+      - name: Run tests (Linux, before build)
+        if: runner.os == 'Linux'
+        run: uv run pytest tests/ -q --timeout=60
+
+      - name: Build executable
+        run: uv run pyinstaller pig_t3.spec --noconfirm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.binary_path }}
+          if-no-files-found: error

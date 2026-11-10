@@ -17,7 +17,7 @@ class FileMetrics:
     pylint_score: float = 10.0  # Starts perfect, penalties apply
     security_issues: int = 0
     issues: List[Issue] = field(default_factory=list)
-    
+
     @property
     def status_cc(self) -> str:
         # Radon CC: A(1-5), B(6-10), C(11-20), D(21-30), E(31-40), F(41+)
@@ -31,7 +31,7 @@ class FileMetrics:
     @property
     def status_mi(self) -> str:
         # Radon MI: 100-20 (A/B/C) is generally acceptable.
-        # < 20 is Bad. 
+        # < 20 is Bad.
         # We set boundaries: > 20 is Green, > 10 Yellow, <= 10 Red.
         if self.maintainability >= 20:
             return "green"

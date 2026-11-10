@@ -11,3 +11,4 @@ build/
 dist/
 *.manifest
 *.spec.bak
+PKG-INFO

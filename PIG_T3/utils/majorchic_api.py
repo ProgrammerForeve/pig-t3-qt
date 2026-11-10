@@ -13,21 +13,21 @@ class BaseWebAPI(ABC):
         self.headless = headless
         self.browser = None
         self.playwright = None
-        
+
         os.makedirs(profile_dir, exist_ok=True)
-        
+
         try:
             self.playwright = sync_playwright().start()
-            
+
             args =[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-infobars"
             ]
-            
+
             if disable_images:
                 args.append("--blink-settings=imagesEnabled=false")
-                
+
             self.browser = self.playwright.chromium.launch_persistent_context(
                 user_data_dir=profile_dir,
                 headless=headless,
@@ -38,10 +38,10 @@ class BaseWebAPI(ABC):
                 permissions=["clipboard-read", "clipboard-write"]
             )
             self.page = self.browser.new_page()
-            
+
             # Скрываем свойство webdriver
             self.page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            
+
             self.page.goto(self.url, wait_until="domcontentloaded")
             self.wait_for_ready()
         except Exception as e:
@@ -89,12 +89,12 @@ class DeepSeekAPI(BaseWebAPI):
             url="https://chat.deepseek.com/",
             headless=headless,
             # Для прохождения Cloudflare / Turnstile часто требуются картинки и canvas
-            disable_images=False 
+            disable_images=False
         )
 
     def wait_for_ready(self, disable_expert=False):
         self._handle_cloudflare()
-        # Ожидаем появления поля ввода. 
+        # Ожидаем появления поля ввода.
         self.page.wait_for_selector("textarea, #chat-input", timeout=30000)
 
         # Устанавливаем режим (Expert или Instant)
@@ -103,7 +103,7 @@ class DeepSeekAPI(BaseWebAPI):
                 btn = self.page.locator('div[data-model-type="expert"]')
             else:
                 btn = self.page.locator('div[data-model-type="default"]')
-                
+
             btn.wait_for(state="visible", timeout=5000)
             if btn.count() > 0:
                 btn.click()
@@ -154,7 +154,7 @@ class DeepSeekAPI(BaseWebAPI):
                 dt_btn.wait_for(state="visible", timeout=5000)
             except:
                 pass # Таймаут игнорируем, проверим видимость ниже
-            
+
             if dt_btn.is_visible():
                 class_attr = dt_btn.get_attribute('class') or ""
                 is_selected = 'ds-toggle-button--selected' in class_attr
@@ -176,7 +176,7 @@ class DeepSeekAPI(BaseWebAPI):
                 time.sleep(1.5)  # Даем время на появление индикатора загрузки в UI
                 # Ждем окончания загрузки файлов
                 loading_texts =[
-                    "обработка", "Uploading", "Parsing", "processing", 
+                    "обработка", "Uploading", "Parsing", "processing",
                     "В ожидании", "Загрузка"
                 ]
                 for text in loading_texts:
@@ -191,7 +191,7 @@ class DeepSeekAPI(BaseWebAPI):
                 print(f"Не удалось прикрепить файлы: {e}")
 
         md_selector = ".ds-markdown, .markdown-body, div[class*='markdown'], div[class*='prose']"
-        
+
         # Запоминаем состояние до отправки (чтобы отличить новый ответ от старого)
         try:
             initial_md_count = self.page.locator(md_selector).count()
@@ -210,12 +210,12 @@ class DeepSeekAPI(BaseWebAPI):
         for attempt in range(4):
             chat_input.press("Enter")
             time.sleep(1.5)
-            
+
             val = chat_input.input_value()
             if not val or val.strip() == "":
                 send_success = True
                 break
-                
+
             # Если Enter не сработал, пробуем нажать кнопку отправки (иконка SVG)
             try:
                 send_btn = self.page.locator('div[role="button"]:has(svg)').last
@@ -258,17 +258,17 @@ class DeepSeekAPI(BaseWebAPI):
             const mds = document.querySelectorAll('.ds-markdown, .markdown-body, div[class*="markdown"], div[class*="prose"]');
             if (mds.length === 0) return false;
             const lastMd = mds[mds.length - 1];
-            
+
             let curr = lastMd;
             // Идем вверх по дереву на несколько уровней
             for (let i = 0; i < 5; i++) {
                 if (!curr) break;
-                
+
                 // Ищем среди всех соседей, идущих строго ПОСЛЕ текущего узла
                 let sibling = curr.nextElementSibling;
                 while (sibling) {
                     // Исключаем панель ввода, чтобы случайно не нажать на скрепку (открытие файла)
-                    const isInputBlock = (sibling.matches && sibling.matches('textarea, #chat-input, form, [contenteditable="true"]')) || 
+                    const isInputBlock = (sibling.matches && sibling.matches('textarea, #chat-input, form, [contenteditable="true"]')) ||
                                          (sibling.querySelector && sibling.querySelector('textarea, #chat-input, form, [contenteditable="true"]'));
                     if (isInputBlock) {
                         sibling = sibling.nextElementSibling;
@@ -293,7 +293,7 @@ class DeepSeekAPI(BaseWebAPI):
             if cancel_event and cancel_event.is_set():
                 return "__ERROR_CANCELLED__"
             time.sleep(1)
-            
+
             try:
                 current_md_count = self.page.locator(md_selector).count()
                 texts = self.page.locator(md_selector).all_inner_texts()
@@ -320,7 +320,7 @@ class DeepSeekAPI(BaseWebAPI):
                     print("Ответ промта:",clip_val,"Конец ответа промта")
                     if clip_val:
                         return clip_val
-                
+
                 # 2. РЕЗЕРВНЫЙ ТРИГГЕР: стабильность текста
                 if current_text and current_text == last_text:
                     stable_count += 1
@@ -392,7 +392,7 @@ class GeminiAPI(BaseWebAPI):
                 file_input = self.page.locator('input[type="file"]')
                 file_input.wait_for(state="attached", timeout=5000)
                 file_input.set_input_files(files)
-                
+
                 time.sleep(1.5)  # Даем время на появление индикатора
                 # Ждем пока исчезнет надпись Loading
                 loading_texts =["Loading", "В ожидании", "Загрузка", "Uploading"]
@@ -451,7 +451,7 @@ class GeminiAPI(BaseWebAPI):
 
         try:
             last_turn = self.page.locator('ms-chat-turn, div[data-turn-role="Model"], div.chat-turn-container.model').last
-            
+
             # Попытка 1: найти кнопку меню и скопировать как Markdown
             copy_success = False
             try:
@@ -459,7 +459,7 @@ class GeminiAPI(BaseWebAPI):
                 if options_btn.count() > 0 and options_btn.is_visible():
                     options_btn.click(timeout=3000, force=True)
                     self.page.wait_for_timeout(500)
-                    
+
                     copy_btn = self.page.locator('button[role="menuitem"]:has-text("Copy as markdown"), button[role="menuitem"]:has-text("Copy")').first
                     if copy_btn.count() > 0 and copy_btn.is_visible():
                         copy_btn.click(timeout=3000, force=True)
@@ -472,7 +472,7 @@ class GeminiAPI(BaseWebAPI):
                 clip_val = self.page.evaluate("navigator.clipboard.readText().catch(() => '')")
                 if clip_val:
                     return clip_val
-            
+
             # Попытка 2: Читаем текст прямо из DOM (фоллбек на случай изменений UI)
             try:
                 last_turn.evaluate("""(el) => {
@@ -481,11 +481,11 @@ class GeminiAPI(BaseWebAPI):
                 }""")
             except:
                 pass
-                
+
             text = last_turn.inner_text()
             if text.strip():
                 return _clean_text(text)
-                
+
         except Exception as e:
             return f"Ошибка при извлечении текста: {e}"
 
@@ -515,7 +515,7 @@ class MajorchicAPIAdapter:
                 self.ai = GeminiAPI(profile_name=self.profile_name, headless=self.headless, timeout=self.timeout)
             else:
                 self.ai = DeepSeekAPI(
-                    profile_name=self.profile_name, 
+                    profile_name=self.profile_name,
                     headless=self.headless,
                     expert_mode=self.expert_mode,
                     deep_think=self.deep_think,
@@ -542,7 +542,7 @@ class MajorchicAPIAdapter:
     def send(self, payload, cancel_event=None):
         self._init_ai()
         prompt = self._parse_payload(payload)
-        
+
         if self.backend == "deepseek":
             dt = payload.get("deep_think", self.deep_think) if isinstance(payload, dict) else self.deep_think
             ot = self.ai.ask(prompt, deep_think=dt, cancel_event=cancel_event)

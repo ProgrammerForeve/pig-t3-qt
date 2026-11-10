@@ -53,7 +53,7 @@ class ContextOptimizer:
             if progress_callback:
                 progress_callback(20, "LLM-ранжирование всех файлов...")
             self._collect_metadata(self.all_files)
-            
+
             try:
                 scores = self._llm_rank_files(self.all_files)
                 if not scores or all(v == 50 for v in scores.values()):
@@ -69,7 +69,7 @@ class ContextOptimizer:
                 for f in sorted_files:
                     if current_tokens >= self.limit_tokens and len(selected_files) > 0:
                         break
-                    
+
                     if scores.get(f, 0) == 0 and len(selected_files) > 0:
                         continue
 

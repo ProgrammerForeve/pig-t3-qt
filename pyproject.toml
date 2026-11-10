@@ -140,6 +140,7 @@ exclude = [
 
 [dependency-groups]
 dev = [
+    "pre-commit>=3.5.0",
     "pyinstaller>=6.22.3",
     "pytest-qt>=4.4.0",
     "pytest-timeout>=2.4.0",
