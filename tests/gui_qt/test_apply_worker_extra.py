@@ -143,3 +143,31 @@ def test_apply_worker_empty_json_error(qtbot, managed_thread, tmp_path):
     with qtbot.waitSignal(w.error, timeout=2000):
         t.start()
     assert errors
+
+
+# ---------- _extract_paths_from_actions ----------
+
+
+def test_extract_paths_from_actions():
+    from PIG_T3.gui_qt.workers.apply_worker import _extract_paths_from_actions
+
+    data = [
+        {"action": "create", "path": "a.py"},
+        {"action": "delete", "path": "b.py"},
+        {"action": "move", "source": "old.py", "destination": "new.py"},
+        {"action": "mark_step_completed", "step_id": "s1"},
+    ]
+    result = _extract_paths_from_actions(data)
+    assert "a.py" in result
+    assert "b.py" in result
+    assert "old.py" in result
+    assert "new.py" in result
+    # mark_step_completed не имеет path
+    assert len(result) == 4
+
+
+def test_extract_paths_empty():
+    from PIG_T3.gui_qt.workers.apply_worker import _extract_paths_from_actions
+
+    assert _extract_paths_from_actions([]) == []
+    assert _extract_paths_from_actions([{"action": "mark_step_completed"}]) == []
