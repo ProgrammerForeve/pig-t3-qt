@@ -126,6 +126,26 @@ class WebWrapper:
                     adapter.close()
         return _parse_scores(response or "")
 
+    def ask(self, prompt: str) -> str:
+        from ...utils.majorchic_api import MajorchicAPIAdapter
+
+        adapter = None
+        try:
+            adapter = MajorchicAPIAdapter(
+                backend=self._backend,
+                headless=False,
+                profile_name="default",
+                expert_mode=self._expert,
+                deep_think=self._deep_think,
+                timeout=self._timeout,
+                stable_count=self._stable_count,
+            )
+            return adapter.send(prompt) or ""
+        finally:
+            if adapter is not None:
+                with contextlib.suppress(Exception):
+                    adapter.close()
+
 
 # ---------- BomjAPI bridge ----------
 
@@ -181,6 +201,9 @@ class BomjWrapper:
         prompt = _build_prompt(task, meta_list)
         response = self._bridge.ask({"model": "BomjAPI", "prompt": prompt})
         return _parse_scores(response)
+
+    def ask(self, prompt: str) -> str:
+        return self._bridge.ask({"model": "BomjAPI", "prompt": prompt})
 
 
 # ---------- Factory ----------

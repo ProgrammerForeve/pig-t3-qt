@@ -13,10 +13,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -37,6 +38,8 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.plan_validator import validate_plan
+from ..dialogs.new_plan_dialog import NewPlanDialog
+from ..workers.generate_plan_worker import GeneratePlanWorker
 
 _SAVE_DEBOUNCE_MS = 500
 
@@ -71,6 +74,8 @@ class PlanTab(QWidget):
         self._current_path: str = self.settings.get("root_folder", "")
         self.plan_data: list[dict] = []
         self._current_index: int = -1
+        self._gen_plan_thread: QThread | None = None
+        self._gen_plan_worker: GeneratePlanWorker | None = None
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(_SAVE_DEBOUNCE_MS)
@@ -235,8 +240,15 @@ class PlanTab(QWidget):
             print(f"save_plan error: {e}")
 
     def stop_workers(self) -> None:
-        """Заглушка для MainWindow.closeEvent (воркеры добавятся в T-406)."""
         self._save_timer.stop()
+        thread = self._gen_plan_thread
+        self._gen_plan_thread = None
+        self._gen_plan_worker = None
+        if thread is not None:
+            with contextlib.suppress(RuntimeError):
+                thread.requestInterruption()
+                thread.quit()
+                thread.wait(3000)
 
     # ---------- List rendering ----------
 
@@ -373,11 +385,92 @@ class PlanTab(QWidget):
     # ---------- Handlers ----------
 
     def _on_new_plan_clicked(self) -> None:
-        # T-405 подменит на диалог с LLM
-        self._show_warning_stub(
-            "Генерация плана",
-            "Генерация плана будет реализована в T-405.",
+        if not self._current_path or not os.path.isdir(self._current_path):
+            _show_warning(
+                self,
+                "Ошибка",
+                "Сначала выберите папку проекта во вкладке Генератор.",
+            )
+            return
+
+        models = ["None", "BomjAPI", "Web: Gemini", "Web: DeepSeek"]
+        with contextlib.suppress(Exception):
+            from ...core.ollama_client import get_installed_models
+
+            models.extend(get_installed_models())
+
+        dlg = NewPlanDialog(models, parent=self)
+        if dlg.exec() != NewPlanDialog.DialogCode.Accepted:
+            return
+
+        concept = dlg.get_concept()
+        model = dlg.get_model()
+        self._start_generate_plan(concept, model)
+
+    def _start_generate_plan(self, concept: str, model_name: str) -> None:
+        if self._gen_plan_thread is not None:
+            return
+        self.btn_new_plan.setEnabled(False)
+        self.btn_exec_selected.setEnabled(False)
+        self.btn_exec_full.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Генерация плана: подготовка...")
+
+        limit = int(self.settings.get("plan_generation_limit_tokens", 12000))
+        self._gen_plan_worker = GeneratePlanWorker(
+            root_folder=self._current_path,
+            concept=concept,
+            model_name=model_name,
+            settings=self.settings,
+            limit_tokens=limit,
+            parent_widget=self,
         )
+        self._gen_plan_thread = QThread(self)
+        self._gen_plan_worker.moveToThread(self._gen_plan_thread)
+        self._gen_plan_thread.started.connect(self._gen_plan_worker.run)
+        self._gen_plan_worker.progress.connect(self._on_gen_plan_progress)
+        self._gen_plan_worker.done.connect(self._on_gen_plan_done)
+        self._gen_plan_worker.error.connect(self._on_gen_plan_error)
+        self._gen_plan_worker.cancelled.connect(self._on_gen_plan_cancelled)
+        for sig in (
+            self._gen_plan_worker.done,
+            self._gen_plan_worker.error,
+            self._gen_plan_worker.cancelled,
+        ):
+            sig.connect(self._cleanup_gen_plan_thread)
+        self._gen_plan_thread.start()
+
+    def _on_gen_plan_progress(self, percent: int, msg: str) -> None:
+        self.progress_bar.setValue(percent)
+        self.status_label.setText(f"{msg} ({percent}%)")
+
+    def _on_gen_plan_done(self, plan: list) -> None:
+        self.plan_data = plan
+        self.save_plan_silently()
+        self._refresh_list()
+        self.status_label.setText(f"✅ План сгенерирован. Шагов: {len(plan)}")
+
+    def _on_gen_plan_error(self, msg: str) -> None:
+        self.status_label.setText(f"❌ Ошибка генерации: {msg}")
+        _show_error(self, "Ошибка генерации", msg)
+
+    def _on_gen_plan_cancelled(self) -> None:
+        self.status_label.setText("⏹ Генерация плана отменена")
+
+    def _cleanup_gen_plan_thread(self, *_args) -> None:
+        thread = self._gen_plan_thread
+        self._gen_plan_thread = None
+        self._gen_plan_worker = None
+        if thread is not None:
+            with contextlib.suppress(RuntimeError):
+                thread.quit()
+                thread.wait(3000)
+        self.btn_new_plan.setEnabled(True)
+        self.btn_exec_selected.setEnabled(True)
+        self.btn_exec_full.setEnabled(True)
+        self.progress_bar.setVisible(False)
 
     def _on_delete_step(self) -> None:
         if self._current_index < 0:

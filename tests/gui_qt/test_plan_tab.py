@@ -180,3 +180,32 @@ def test_set_path_reloads(qtbot, write_plan, pig_dir):
     qtbot.addWidget(tab)
     tab.set_path(str(pig_dir))
     assert len(tab.plan_data) == 2
+
+
+# ---------- T-405: генерация плана ----------
+
+
+def test_new_plan_clicked_warns_without_path(qtbot, monkeypatch):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    warns: list[str] = []
+    monkeypatch.setattr(
+        plan_module,
+        "_show_warning",
+        lambda parent, title, text: warns.append(text),
+    )
+    tab = PlanTab({"root_folder": ""})
+    qtbot.addWidget(tab)
+    tab._on_new_plan_clicked()
+    assert warns
+
+
+def test_on_gen_plan_done_updates_plan(qtbot, pig_dir):
+    tab = PlanTab({"root_folder": str(pig_dir)})
+    qtbot.addWidget(tab)
+    new_plan = [
+        {"id": "s1", "title": "T1", "description": "d1", "completed": False, "report": "", "status": "pending"},
+    ]
+    tab._on_gen_plan_done(new_plan)
+    assert tab.plan_data == new_plan
+    assert tab.plan_list.count() == 1
