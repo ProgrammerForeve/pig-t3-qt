@@ -29,6 +29,15 @@ dependencies = [
     "bandit",
     "Pillow",
     "majorchik-api",
+    "networkx>=3.1",
+    "ruff>=0.17.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "pre-commit>=3.0.0",
+    "mypy>=1.10.0",
 ]
 
 [project.urls]
@@ -39,8 +48,88 @@ Issues = "https://github.com/yourusername/pig-t3/issues"
 pig-t3 = "PIG_T3.main:main"
 
 [tool.setuptools]
-packages = ["PIG_T3", "PIG_T3.core", "PIG_T3.core.quality", "PIG_T3.gui", "PIG_T3.gui.tabs", "PIG_T3.utils"]
+packages = [
+    "PIG_T3",
+    "PIG_T3.core",
+    "PIG_T3.core.quality",
+    "PIG_T3.gui",
+    "PIG_T3.gui.tabs",
+    "PIG_T3.utils",
+]
 include-package-data = true
 
 [tool.setuptools.package-data]
 PIG_T3 = ["logo.png", "icon.png"]
+
+# ============================================================
+#  Ruff — линтер + форматтер (заменяет flake8, black, isort)
+# ============================================================
+[tool.ruff]
+target-version = "py38"
+line-length = 120
+fix = true
+
+exclude = [
+    ".bzr", ".direnv", ".eggs", ".git", ".hg", ".mypy_cache",
+    ".nox", ".pytest_cache", ".ruff_cache", ".svn", ".tox",
+    ".venv", "venv", "__pypackages__", "_build", "build", "dist",
+    "*.egg-info",
+    # артефакты самого PIG-T3, появляющиеся в тестовых проектах
+    ".pig", ".pig_cache", "pig_plan_log.txt",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle (стиль)
+    "F",    # Pyflakes (ошибки)
+    "W",    # pycodestyle (предупреждения)
+    "I",    # isort (сортировка импортов)
+    "UP",   # pyupgrade (устаревший синтаксис)
+    "B",    # flake8-bugbear (потенциальные баги)
+    "SIM",  # flake8-simplify (упрощение кода)
+    "S",    # flake8-bandit (безопасность)
+    "RUF",  # специфичные для Ruff
+]
+
+ignore = [
+    "E501",   # длина строки (контролируется line-length)
+    "B008",   # вызов функции в аргументе по умолчанию (часто в tkinter)
+    "S101",   # assert (GUI-приложение использует их редко, но не критично)
+    "S311",   # random не для криптографии — OK для GUI
+    "RUF001", # неоднозначные unicode-символы (в русских строках)
+    "RUF002", # то же для docstring
+    "RUF003", # то же для комментариев
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
+"tests/*" = ["S101", "E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["PIG_T3"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = 88
+
+# ============================================================
+#  mypy — статическая проверка типов (опционально)
+# ============================================================
+[tool.mypy]
+python_version = "3.8"
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+show_error_codes = true
+exclude = [
+    "^build/",
+    "^dist/",
+    "^\\.venv/",
+    "^venv/",
+]

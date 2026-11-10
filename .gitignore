@@ -1,0 +1,4 @@
+app_config.json
+.venv
+.pig
+*.pyc

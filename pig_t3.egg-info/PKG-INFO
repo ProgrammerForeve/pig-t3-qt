@@ -44,6 +44,12 @@ Requires-Dist: vulture
 Requires-Dist: bandit
 Requires-Dist: Pillow
 Requires-Dist: majorchik-api
+Requires-Dist: networkx>=3.1
+Requires-Dist: ruff>=0.17.4
+Provides-Extra: dev
+Requires-Dist: ruff>=0.8.0; extra == "dev"
+Requires-Dist: pre-commit>=3.0.0; extra == "dev"
+Requires-Dist: mypy>=1.10.0; extra == "dev"
 Dynamic: license-file
 
 # 🐖 PIG-T3 – AI Context Generator & Patcher

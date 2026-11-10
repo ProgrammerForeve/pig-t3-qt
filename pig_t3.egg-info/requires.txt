@@ -5,3 +5,10 @@ vulture
 bandit
 Pillow
 majorchik-api
+networkx>=3.1
+ruff>=0.17.4
+
+[dev]
+ruff>=0.8.0
+pre-commit>=3.0.0
+mypy>=1.10.0
