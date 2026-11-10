@@ -12,7 +12,7 @@ if [ "${1:-}" = "--cov" ]; then
     echo ""
     echo "==> Coverage report"
     PIG_NO_EXIT=1 uv run pytest tests/ -q --timeout=60 \
-        --cov=PIG_T3 --cov-report=term-missing --cov-fail-under=55
+        --cov=PIG_T3 --cov-report=term-missing --cov-fail-under=60
     COV_RC=$?
     if [ "$COV_RC" -ne 0 ]; then
         echo ""
