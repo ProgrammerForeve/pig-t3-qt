@@ -128,8 +128,8 @@ class ProjectAnalyzer:
         Used by both the GUI (for preview) and the Generator.
         """
         root_folder = config['root_folder']
-        extensions = [e.strip() for e in config['extensions'].split(',')]
-        ignore_list = [i.strip() for i in config['ignore_list'].split(',')]
+        extensions = [e.strip() for e in config['extensions'].split(',') if e.strip()]
+        ignore_list = [i.strip() for i in config['ignore_list'].split(',') if i.strip()]
         strict_mode = config['strict_mode']
         ignore_self = config.get("ignore_self", False)
 
@@ -185,142 +185,176 @@ class ProjectAnalyzer:
         return paths_to_process, empty_dirs
 
     def process(self, config, progress_callback=None, cancel_callback=None):
-        root_folder = config['root_folder']
-        base_name = config['output_name']
-        include_empty = config.get('include_empty_folders', False)
+        """Генерирует контекст-отчёт через двухфазный streaming.
+
+        Phase 1: scan + чтение метаданных (lines, chars) — контент в памяти
+        не задерживается, каждый файл читается и закрывается.
+        Phase 2: проход по отсортированным путям, чтение + запись в отчёт
+        — одновременно в памяти только один файл.
+
+        Память: O(N) для метаданных + O(1) для контента вместо O(N * avg_size).
+        I/O: каждый файл читается дважды (на NVMe незаметно, на HDD 2x).
+        """
+        root_folder = config["root_folder"]
+        base_name = config["output_name"]
+        include_empty = config.get("include_empty_folders", False)
         add_edit_prompt = config.get("add_edit_prompt", False)
         line_numbers = config.get("line_numbers", False)
         use_sharp_indent = config.get("use_sharp_indent", False)
 
-        # Optional: List of specifically allowed files (from GUI checkboxes)
-        # If None/Empty, assume all found files are allowed.
-        # Изменено на Blacklist: список явно исключенных файлов (из GUI)
-        # Если файла нет в excluded_paths, он считается включенным (полезно для новых файлов).
         excluded_paths_abs = config.get("excluded_paths", None)
         if excluded_paths_abs is not None:
             excluded_paths_abs = set(excluded_paths_abs)
 
         final_ext = ".txt"
-        if base_name.lower().endswith('.txt') or base_name.lower().endswith('.md'):
+        if base_name.lower().endswith(".txt") or base_name.lower().endswith(".md"):
             base_name = os.path.splitext(base_name)[0]
         output_file = os.path.join(root_folder, base_name + final_ext)
 
-        # 1. Scan files
+        # ---------- Phase 1: scan + metadata ----------
         paths_to_process, empty_dirs = self.scan_directory(config)
         total_files_count = len(paths_to_process)
-        files_data = []
-        found_paths =[]
+        file_metadata: list[dict] = []
+        found_paths: list[str] = []
         total_lines = 0
         total_chars = 0
-        excluded_files_grouped = {}
+        excluded_files_grouped: dict = {}
 
         for i, (full_path, ext) in enumerate(paths_to_process):
             if cancel_callback and cancel_callback():
                 return None
             rel_path = os.path.relpath(full_path, root_folder).replace("\\", "/")
 
-            # Check if we should include CONTENT of this file
-            # If allowed_paths_abs is set, we check if full_path is in it.
             include_content = True
             if excluded_paths_abs is not None:
                 if os.path.normcase(os.path.abspath(full_path)) in excluded_paths_abs:
                     include_content = False
 
-            try:
-                if include_content:
-                    content = ""
-                    with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+            if include_content:
+                try:
+                    with open(full_path, encoding="utf-8", errors="replace") as f:
                         content = f.read()
                     lines_count = len(content.splitlines())
-
-                    # Нумерация строк полезна для JSON режима replace_lines
-                    if line_numbers:
-                        numbered_content = []
-                        for num, line in enumerate(content.splitlines(), 1):
-                            numbered_content.append(f"{num:4d} | {line}")
-                        content = "\n".join(numbered_content)
-
+                    file_metadata.append(
+                        {
+                            "full_path": full_path,
+                            "rel_path": rel_path,
+                            "lines": lines_count,
+                            "chars": len(content),
+                            "ext": ext,
+                        }
+                    )
                     found_paths.append(rel_path)
-                    files_data.append({'path': rel_path, 'content': content, 'lines': lines_count, 'ext': ext, 'included': True})
                     total_lines += lines_count
                     total_chars += len(content)
-                else:
-                    dir_name = os.path.dirname(rel_path)
-                    _, real_ext = os.path.splitext(rel_path)
-                    key = (dir_name, real_ext.lower())
-
-                    if key not in excluded_files_grouped:
-                        excluded_files_grouped[key] = {'paths':[], 'count': 0}
-
-                    if excluded_files_grouped[key]['count'] < 10:
-                        excluded_files_grouped[key]['paths'].append(rel_path)
-                    excluded_files_grouped[key]['count'] += 1
-
-            except Exception as e:
-                print(f"Ошибка чтения {rel_path}: {e}")
+                except Exception as e:
+                    print(f"Ошибка чтения {rel_path}: {e}")
+            else:
+                dir_name = os.path.dirname(rel_path)
+                _, real_ext = os.path.splitext(rel_path)
+                key = (dir_name, real_ext.lower())
+                if key not in excluded_files_grouped:
+                    excluded_files_grouped[key] = {"paths": [], "count": 0}
+                if excluded_files_grouped[key]["count"] < 10:
+                    excluded_files_grouped[key]["paths"].append(rel_path)
+                excluded_files_grouped[key]["count"] += 1
 
             if progress_callback:
                 progress_callback(i + 1, total_files_count)
 
-        # Process grouped excluded files
+        # Group excluded files
         for (dir_name, ext_lower), group_data in excluded_files_grouped.items():
-            paths = group_data['paths']
-            total_excluded = group_data['count']
+            paths = group_data["paths"]
+            total_excluded = group_data["count"]
             paths.sort()
-
             found_paths.extend(paths)
             if total_excluded > 10:
                 more_count = total_excluded - 10
-                summary_name = f"... {more_count} More {ext_lower} files" if ext_lower else f"... {more_count} More files"
+                summary_name = (
+                    f"... {more_count} More {ext_lower} files"
+                    if ext_lower
+                    else f"... {more_count} More files"
+                )
                 summary_path = f"{dir_name}/{summary_name}" if dir_name else summary_name
                 found_paths.append(summary_path)
 
-        files_data.sort(key=lambda x: x['path'])
+        file_metadata.sort(key=lambda x: x["rel_path"])
+
         all_tree_paths = found_paths
         if include_empty:
-            all_tree_paths +=[f"{d} (empty)" for d in sorted(empty_dirs)]
+            all_tree_paths += [f"{d} (empty)" for d in sorted(empty_dirs)]
         tree_view = self.generate_tree(all_tree_paths)
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        with open(output_file, 'w', encoding='utf-8') as f:
-            intro = (
-                f"PROJECT CONTEXT REPORT\n"
-                f"Generated: {date_str}\n"
-                f"Total Files: {len(files_data)}\n"
-                f"Total Lines: {total_lines}\n"
-                f"Total Chars: {total_chars}\n\n"
-                f"INSTRUCTION FOR AI:\n"
-                f"This file contains the full source code of a project.\n"
-                f"The structure is provided in the <project_structure> tag.\n"
-                f"Each file's content is wrapped in a <file path=\"...\"> tag.\n"
-                f"Use this context to understand the codebase.\n"
-                f"================================================================================\n\n"
-            )
-            f.write(intro)
-            f.write("<project_structure>\n")
-            f.write(tree_view)
-            f.write("\n</project_structure>\n\n")
-            f.write("================================================================================\n")
-            f.write("FILE CONTENTS\n")
-            f.write("================================================================================\n\n")
-            for item in files_data:
-                if not item['included']: continue
-                f.write(f"<file path=\"{item['path']}\">\n")
-                f.write(item['content'])
-                if not item['content'].endswith('\n'): f.write('\n')
-                f.write(f"</file>\n\n")
-            if config.get("include_plan", False):
-                plan_path = os.path.join(root_folder, ".pig", "plan.json")
-                if os.path.exists(plan_path):
+        # ---------- Phase 2: write (one file in memory) ----------
+        class _Cancelled(Exception):
+            pass
+
+        try:
+            with open(output_file, "w", encoding="utf-8") as f:
+                intro = (
+                    f"PROJECT CONTEXT REPORT\n"
+                    f"Generated: {date_str}\n"
+                    f"Total Files: {len(file_metadata)}\n"
+                    f"Total Lines: {total_lines}\n"
+                    f"Total Chars: {total_chars}\n\n"
+                    f"INSTRUCTION FOR AI:\n"
+                    f"This file contains the full source code of a project.\n"
+                    f"The structure is provided in the <project_structure> tag.\n"
+                    f'Each file\'s content is wrapped in a <file path="..."> tag.\n'
+                    f"Use this context to understand the codebase.\n"
+                    f"=" * 80 + "\n\n"
+                )
+                f.write(intro)
+                f.write("<project_structure>\n")
+                f.write(tree_view)
+                f.write("\n</project_structure>\n\n")
+                f.write("=" * 80 + "\n")
+                f.write("FILE CONTENTS\n")
+                f.write("=" * 80 + "\n\n")
+
+                for idx, m in enumerate(file_metadata):
+                    if idx % 10 == 0 and cancel_callback and cancel_callback():
+                        raise _Cancelled()
                     try:
-                        import json
-                        with open(plan_path, 'r', encoding='utf-8') as pf:
-                            plan_data = json.load(pf)
-                        f.write("================================================================================\n")
-                        f.write("PROJECT PLAN\n")
-                        f.write("================================================================================\n")
-                        f.write(json.dumps(plan_data, indent=2, ensure_ascii=False) + "\n\n")
-                    except Exception:
-                        pass
-            if add_edit_prompt: self._write_patching_instructions(f, line_numbers, use_sharp_indent)
-        return output_file, len(files_data), total_lines, total_chars
+                        with open(m["full_path"], encoding="utf-8", errors="replace") as src:
+                            content = src.read()
+                    except Exception as e:
+                        print(f"Ошибка повторного чтения {m['rel_path']}: {e}")
+                        continue
+
+                    if line_numbers:
+                        numbered = []
+                        for num, line in enumerate(content.splitlines(), 1):
+                            numbered.append(f"{num:4d} | {line}")
+                        content = "\n".join(numbered)
+
+                    f.write(f'<file path="{m["rel_path"]}">\n')
+                    f.write(content)
+                    if not content.endswith("\n"):
+                        f.write("\n")
+                    f.write("</file>\n\n")
+
+                if config.get("include_plan", False):
+                    plan_path = os.path.join(root_folder, ".pig", "plan.json")
+                    if os.path.exists(plan_path):
+                        try:
+                            with open(plan_path, encoding="utf-8") as pf:
+                                plan_data = json.load(pf)
+                            f.write("=" * 80 + "\n")
+                            f.write("PROJECT PLAN\n")
+                            f.write("=" * 80 + "\n")
+                            f.write(json.dumps(plan_data, indent=2, ensure_ascii=False) + "\n\n")
+                        except Exception:
+                            pass
+
+                if add_edit_prompt:
+                    self._write_patching_instructions(f, line_numbers, use_sharp_indent)
+        except _Cancelled:
+            try:
+                os.remove(output_file)
+            except OSError:
+                pass
+            return None
+
+        return output_file, len(file_metadata), total_lines, total_chars
