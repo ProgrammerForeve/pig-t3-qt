@@ -1,22 +1,24 @@
-"""ProjectTreeModel: QAbstractItemModel для дерева проекта с чекбоксами (T-104).
+"""ProjectTreeModel: QAbstractItemModel для дерева проекта с чекбоксами.
 
 Хранит иерархию узлов (файлы + папки) с tristate-состоянием:
 - Checked — включён (по умолчанию)
 - Unchecked — исключён
 - PartiallyChecked — у папки есть смешанные потомки
 
-Публичный интерфейс:
-- ``ProjectTreeModel(root_path, files)`` — где ``files`` — список
-  ``(absolute_path, extension)`` из ``ProjectAnalyzer.scan_directory()``
-- ``checkStateChanged`` (Signal) — испускается при любом изменении чекбокса
-- ``checked_files() -> list[str]`` — абсолютные пути включённых файлов
-- ``unchecked_paths() -> list[str]`` — относительные пути исключённых узлов
-  (совместимо с ``ui_tree_unchecked`` legacy-формата)
-- ``set_unchecked_paths(paths)`` — восстановить состояние по списку путей
-- ``find_index(rel_path) -> QModelIndex`` — найти индекс по относительному пути
+Внутренние ID (а не Python-указатели) в QModelIndex:
+- ``createIndex(row, col, node_id)`` использует quintptr-перегрузку
+- ``QModelIndex.internalId()`` возвращает int
+- Соответствие id → TreeNode в ``_id_to_node``
+- НЕ используем ``internalPointer()`` для TreeNode — PySide6 хранит
+  указатели как borrowed reference, что приводит к heap corruption
+  при destructor-order races (наблюдалось как free(): invalid size
+  на shutdown).
 
-Сортировка: папки раньше файлов, обе группы — по алфавиту
-(case-insensitive).
+Публичный интерфейс:
+- ``ProjectTreeModel(root_path, files)``
+- ``checkStateChanged`` (Signal)
+- ``checked_files()``, ``unchecked_paths()``, ``set_unchecked_paths(paths)``
+- ``find_index(rel_path)``, ``relative_path(index)``, ``is_dir(index)``
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ class TreeNode:
     parent: TreeNode | None = None
     children: list[TreeNode] = field(default_factory=list)
     check_state: Qt.CheckState = Qt.CheckState.Checked
+    # Внутренний ID для QModelIndex.internalId(); 0 = ещё не назначен.
+    _qt_id: int = 0
 
 
 class ProjectTreeModel(QAbstractItemModel):
@@ -53,17 +57,25 @@ class ProjectTreeModel(QAbstractItemModel):
         super().__init__(parent)
         self.root_path = os.path.abspath(root_path)
         self._root = TreeNode(name="", path=self.root_path, is_dir=True)
-        # Keep-alive for all TreeNode objects ever exposed via
-        # createIndex(...). PySide6 does NOT increment refcount on
-        # internalPointer — it is a borrowed reference. If a TreeNode
-        # is GC'd while QTreeView still holds a persistent index into
-        # it, the next dereference is undefined behaviour (observed
-        # as `free(): invalid size`). Keeping every node alive for
-        # the lifetime of this model prevents the crash at the cost
-        # of a small, bounded memory leak.
-        self._all_nodes: list[TreeNode] = [self._root]
+        self._id_to_node: dict[int, TreeNode] = {}
+        self._next_id = 1
+        self._assign_id(self._root)
         self._build_tree(files)
         self._recompute_all(self._root)
+
+    # ---------- Node registry ----------
+
+    def _assign_id(self, node: TreeNode) -> int:
+        node_id = self._next_id
+        self._next_id += 1
+        node._qt_id = node_id
+        self._id_to_node[node_id] = node
+        return node_id
+
+    def _node_from_index(self, index: QModelIndex) -> TreeNode | None:
+        if not index.isValid():
+            return None
+        return self._id_to_node.get(int(index.internalId()))
 
     # ---------- Building ----------
 
@@ -84,9 +96,9 @@ class ProjectTreeModel(QAbstractItemModel):
                         is_dir=True,
                         parent=parent_node,
                     )
+                    self._assign_id(node)
                     parent_node.children.append(node)
                     dirs_map[current_rel] = node
-                    self._all_nodes.append(node)
                 parent_node = dirs_map[current_rel]
 
             fname = parts[-1]
@@ -96,8 +108,8 @@ class ProjectTreeModel(QAbstractItemModel):
                 is_dir=False,
                 parent=parent_node,
             )
+            self._assign_id(file_node)
             parent_node.children.append(file_node)
-            self._all_nodes.append(file_node)
 
         self._sort_recursive(self._root)
 
@@ -107,7 +119,6 @@ class ProjectTreeModel(QAbstractItemModel):
             self._sort_recursive(child)
 
     def _recompute_all(self, node: TreeNode) -> None:
-        """Bottom-up: состояние папки = агрегат её детей."""
         for child in node.children:
             self._recompute_all(child)
         if node is self._root or not node.children:
@@ -123,11 +134,11 @@ class ProjectTreeModel(QAbstractItemModel):
     # ---------- Index mapping ----------
 
     def _node_to_index(self, node: TreeNode) -> QModelIndex:
-        if node is self._root:
+        if node is self._root or node.parent is None:
             return QModelIndex()
         parent = node.parent
         row = parent.children.index(node)
-        return self.createIndex(row, 0, node)
+        return self.createIndex(row, 0, node._qt_id)
 
     def _find_node(self, rel_path: str) -> TreeNode | None:
         if not rel_path:
@@ -158,15 +169,21 @@ class ProjectTreeModel(QAbstractItemModel):
     ) -> QModelIndex:
         if not self.hasIndex(row, column, parent):
             return QModelIndex()
-        parent_node = parent.internalPointer() if parent.isValid() else self._root
+        if parent.isValid():
+            parent_node = self._node_from_index(parent)
+            if parent_node is None:
+                return QModelIndex()
+        else:
+            parent_node = self._root
         if row < 0 or row >= len(parent_node.children):
             return QModelIndex()
-        return self.createIndex(row, column, parent_node.children[row])
+        child = parent_node.children[row]
+        return self.createIndex(row, column, child._qt_id)
 
     def parent(self, index: QModelIndex) -> QModelIndex:  # type: ignore[override]
         if not index.isValid():
             return QModelIndex()
-        node = index.internalPointer()
+        node = self._node_from_index(index)
         if node is None or node.parent is None or node.parent is self._root:
             return QModelIndex()
         return self._node_to_index(node.parent)
@@ -174,16 +191,21 @@ class ProjectTreeModel(QAbstractItemModel):
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
         if parent.column() > 0:
             return 0
-        node = parent.internalPointer() if parent.isValid() else self._root
+        if parent.isValid():
+            node = self._node_from_index(parent)
+            if node is None:
+                return 0
+        else:
+            node = self._root
         return len(node.children)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
         return 1
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
+        node = self._node_from_index(index)
+        if node is None:
             return None
-        node = index.internalPointer()
         if role == Qt.ItemDataRole.DisplayRole:
             return node.name
         if role == Qt.ItemDataRole.CheckStateRole:
@@ -196,14 +218,16 @@ class ProjectTreeModel(QAbstractItemModel):
         value,
         role: int = Qt.ItemDataRole.EditRole,
     ) -> bool:
-        if not index.isValid() or role != Qt.ItemDataRole.CheckStateRole:
+        if role != Qt.ItemDataRole.CheckStateRole:
+            return False
+        node = self._node_from_index(index)
+        if node is None:
             return False
         try:
             state = Qt.CheckState(value)
         except (ValueError, TypeError):
             return False
 
-        node = index.internalPointer()
         if node.is_dir:
             self._set_subtree_state(node, state)
         else:
@@ -258,24 +282,23 @@ class ProjectTreeModel(QAbstractItemModel):
 
     # ---------- Public helpers ----------
 
-    def relative_path(self, index: QModelIndex) -> str:
-        """Вернуть относительный путь для индекса ('' если невалиден)."""
-        if not index.isValid():
-            return ""
-        node = index.internalPointer()
-        if node is None:
-            return ""
-        return self._rel_path(node)
-
     def find_index(self, rel_path: str) -> QModelIndex:
-        """Вернуть QModelIndex по относительному пути (или invalid, если нет)."""
         node = self._find_node(rel_path)
         if node is None:
             return QModelIndex()
         return self._node_to_index(node)
 
+    def relative_path(self, index: QModelIndex) -> str:
+        node = self._node_from_index(index)
+        if node is None or node is self._root:
+            return ""
+        return self._rel_path(node)
+
+    def is_dir(self, index: QModelIndex) -> bool:
+        node = self._node_from_index(index)
+        return node is not None and node.is_dir
+
     def checked_files(self) -> list[str]:
-        """Абсолютные пути включённых файлов (только листья)."""
         result: list[str] = []
 
         def walk(node: TreeNode) -> None:
@@ -289,12 +312,6 @@ class ProjectTreeModel(QAbstractItemModel):
         return result
 
     def unchecked_paths(self) -> list[str]:
-        """Относительные пути исключённых узлов (файлов и полностью исключённых папок).
-
-        Совместимо с legacy-форматом ``ui_tree_unchecked``:
-        если папка исключена полностью — возвращается её путь (без потомков);
-        если исключён один файл — его путь.
-        """
         result: list[str] = []
 
         def walk(node: TreeNode) -> None:
@@ -309,9 +326,6 @@ class ProjectTreeModel(QAbstractItemModel):
         return result
 
     def set_unchecked_paths(self, paths) -> None:
-        """Сбросить всё в Checked, пометить указанные пути Unchecked,
-        пересчитать состояния папок. Совместим с legacy-форматом (допускает
-        избыточные пути: папка + её потомки)."""
         self._set_subtree_state(self._root, Qt.CheckState.Checked)
         for path in paths:
             node = self._find_node(path)
@@ -325,23 +339,18 @@ class ProjectTreeModel(QAbstractItemModel):
         self._notify_all()
 
     def reset_data(self, files: list[tuple[str, str]], root_path: str) -> None:
-        """Полностью пересобрать дерево из нового списка файлов.
-
-        Состояние чекбоксов сбрасывается в Checked (персистентность —
-        задача T-106).
-
-        Все старые TreeNode остаются живыми в ``_all_nodes``, чтобы
-        QTreeView не держал dangling internalPointer во время reset.
-        """
+        """Полностью пересобрать дерево (чекбоксы сбрасываются в Checked)."""
         self.beginResetModel()
+        self._id_to_node = {}
+        self._next_id = 1
         if root_path:
             self.root_path = os.path.abspath(root_path)
             self._root = TreeNode(name="", path=self.root_path, is_dir=True)
-            self._all_nodes.append(self._root)
+            self._assign_id(self._root)
             self._build_tree(files)
             self._recompute_all(self._root)
         else:
             self.root_path = ""
             self._root = TreeNode(name="", path="/", is_dir=True)
-            self._all_nodes.append(self._root)
+            self._assign_id(self._root)
         self.endResetModel()

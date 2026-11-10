@@ -81,16 +81,26 @@ def test_worker_emits_progress_and_finished(qtbot, managed_thread):
 
 
 def test_worker_thread_actually_separate(qtbot, managed_thread):
-    """Слот run() выполняется НЕ в main-thread."""
-    from PySide6.QtCore import QThread
+    """Слот run() выполняется НЕ в main-thread.
+
+    Храним threading.get_ident() (int), а не QThread.currentThread()
+    (wrapper): wrapper, сохранённый на module-level классе, живёт до
+    shutdown pytest-сессии. При финальном GC shiboken уничтожает
+    C++ QThread раньше, чем держащий его wrapper → heap corruption
+    (free(): invalid size).
+
+    QThread.currentThreadId() в PySide6 не экспортирован, поэтому
+    используем стандартный Python API — threading.get_ident().
+    """
+    import threading
 
     class _ThreadAwareWorker(QObject):
         finished = Signal(str)
-        run_thread = None  # заполняется в run()
+        run_thread_id = None
 
         @Slot()
         def run(self):
-            _ThreadAwareWorker.run_thread = QThread.currentThread()
+            _ThreadAwareWorker.run_thread_id = threading.get_ident()
             self.finished.emit("ok")
 
     thread = managed_thread()
@@ -99,8 +109,8 @@ def test_worker_thread_actually_separate(qtbot, managed_thread):
 
     run_worker_and_wait(qtbot, worker, thread)
 
-    assert _ThreadAwareWorker.run_thread is not None, "run() не выполнился"
-    assert _ThreadAwareWorker.run_thread is not QThread.currentThread(), (
+    assert _ThreadAwareWorker.run_thread_id is not None, "run() не выполнился"
+    assert _ThreadAwareWorker.run_thread_id != threading.get_ident(), (
         "run() выполнился в main-thread — потеряли многопоточность"
     )
 

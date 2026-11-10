@@ -101,6 +101,10 @@ ignore = [
     "RUF001", # неоднозначные unicode-символы (в русских строках)
     "RUF002", # то же для docstring
     "RUF003", # то же для комментариев
+    # --- Добавлено для нового gui_qt ---
+    "S108",   # /tmp/... в тестовых фейках (не реальные temp-файлы)
+    "S603",   # subprocess для radon/pylint/bandit/git — осознанный выбор
+    "S607",   # partial executable path (git, python -m radon) — резолвится через PATH
 ]
 
 [tool.ruff.lint.per-file-ignores]

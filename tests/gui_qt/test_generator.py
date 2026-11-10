@@ -515,3 +515,82 @@ def test_main_window_has_small_minimum_size(qtbot, tmp_path, monkeypatch):
     qtbot.addWidget(window)
     assert window.minimumWidth() <= 800
     assert window.minimumHeight() <= 500
+
+
+# ---------- T-107: генерация ----------
+
+
+def _make_slow_fake(monkeypatch, delay=0.3):
+    import time
+
+    class _FakeAnalyzer:
+        def __init__(self):
+            self.calls = 0
+
+        def process(self, settings, progress_callback=None, cancel_callback=None):
+            self.calls += 1
+            for i in range(5):
+                time.sleep(delay / 5)
+                if cancel_callback and cancel_callback():
+                    return None
+                if progress_callback:
+                    progress_callback(i + 1, 5)
+            return ("out.txt", 3, 120, 4567)
+
+    return _FakeAnalyzer()
+
+
+def test_generate_button_exists(settings, qtbot):
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    assert hasattr(tab, "btn_generate")
+    assert hasattr(tab, "progress_bar")
+    assert hasattr(tab, "status_label")
+
+
+def test_generate_starts_worker(settings, qtbot, monkeypatch, tmp_path):
+    fake = _make_slow_fake(monkeypatch)
+    settings["root_folder"] = str(tmp_path)
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.analyzer = fake
+
+    with qtbot.waitSignal(tab.generation_finished, timeout=3000):
+        tab.btn_generate.click()
+
+    # Дождаться полной остановки фонового потока перед teardown:
+    # иначе qtbot.addWidget удалит tab (а с ним QThread-ребёнка)
+    # раньше, чем cleanup-слот успеет остановить поток → qFatal abort.
+    qtbot.waitUntil(lambda: tab._gen_thread is None, timeout=3000)
+    assert fake.calls == 1
+
+
+def test_generate_cancel(settings, qtbot, monkeypatch, tmp_path):
+    fake = _make_slow_fake(monkeypatch, delay=0.6)
+    settings["root_folder"] = str(tmp_path)
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.analyzer = fake
+
+    with qtbot.waitSignal(tab.generation_cancelled, timeout=3000):
+        tab.btn_generate.click()
+        qtbot.wait(100)
+        tab.btn_generate.click()
+
+    qtbot.waitUntil(lambda: tab._gen_thread is None, timeout=3000)
+
+
+def test_generate_button_label_changes_during_run(settings, qtbot, monkeypatch, tmp_path):
+    fake = _make_slow_fake(monkeypatch, delay=0.6)
+    settings["root_folder"] = str(tmp_path)
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.analyzer = fake
+
+    initial_text = tab.btn_generate.text()
+    tab.btn_generate.click()
+    assert "ОТМЕН" in tab.btn_generate.text().upper()
+    with qtbot.waitSignal(tab.generation_finished, timeout=3000):
+        pass
+    qtbot.waitUntil(lambda: tab._gen_thread is None, timeout=3000)
+    assert tab.btn_generate.text() == initial_text

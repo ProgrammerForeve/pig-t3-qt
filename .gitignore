@@ -4,3 +4,4 @@ app_config.json
 *.pyc
 project_context.txt
 check.log
+pig_t3.egg-info/

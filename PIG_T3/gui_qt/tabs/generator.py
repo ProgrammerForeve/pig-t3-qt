@@ -13,10 +13,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
-from PySide6.QtCore import QModelIndex, QStringListModel, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QModelIndex,
+    QStringListModel,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QCompleter,
@@ -25,6 +33,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QToolButton,
     QVBoxLayout,
@@ -34,6 +43,7 @@ from PySide6.QtWidgets import (
 from ...core.analyzer import ProjectAnalyzer
 from ..models.project_tree import ProjectTreeModel
 from ..widgets.project_tree_view import ProjectTreeView
+from ..workers.generate_worker import GenerateWorker
 
 _RECENT_PROJECTS_LIMIT = 10
 _TREE_REFRESH_DELAY_MS = 600
@@ -43,6 +53,9 @@ class GeneratorTab(QWidget):
     """Каркас вкладки «Генератор»."""
 
     settings_changed = Signal()
+    generation_finished = Signal(str, int, int, int)
+    generation_cancelled = Signal()
+    generation_error = Signal(str)
 
     def __init__(self, settings: dict):
         super().__init__()
@@ -50,10 +63,24 @@ class GeneratorTab(QWidget):
         self.analyzer = ProjectAnalyzer()
         self._last_root = None
 
+        self._gen_thread: QThread | None = None
+        self._gen_worker: GenerateWorker | None = None
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(_TREE_REFRESH_DELAY_MS)
         self._refresh_timer.timeout.connect(self.refresh_tree)
+
+        # Deferred-таймер для восстановления раскрытых папок.
+        # QTimer.singleShot(0, lambda: ...) держит self через лямбду,
+        # которая может выстрелить уже после уничтожения C++ QTreeView
+        # (например, при teardown в pytest-qt). Атрибутный QTimer(self)
+        # уничтожается вместе с self — timeout не сработает на мёртвом
+        # C++ объекте.
+        self._pending_expanded_restore: list[str] = []
+        self._restore_expanded_timer = QTimer(self)
+        self._restore_expanded_timer.setSingleShot(True)
+        self._restore_expanded_timer.setInterval(0)
+        self._restore_expanded_timer.timeout.connect(self._on_restore_expanded_timer)
 
         self._setup_ui()
         self._populate(settings)
@@ -69,11 +96,10 @@ class GeneratorTab(QWidget):
 
         # Restore expanded DEFERRED — setExpanded creates persistent
         # indices in QTreeView. Calling it synchronously right after
-        # endResetModel can corrupt view internals on some Qt versions
-        # (free(): invalid size). One event-loop tick is enough.
+        # endResetModel can corrupt view internals on some Qt versions.
         expanded = self.settings.get("ui_tree_expanded", [])
         if expanded:
-            QTimer.singleShot(0, lambda e=list(expanded): self._restore_expanded_paths(e))
+            self._schedule_expanded_restore(expanded)
 
     # ---------- UI ----------
 
@@ -155,6 +181,19 @@ class GeneratorTab(QWidget):
         self.tree_view = ProjectTreeView()
         self.tree_view.setModel(self.tree_model)
         layout.addWidget(self.tree_view, 1)
+
+        # --- Панель генерации (T-107) ---
+        self.btn_generate = QPushButton("🚀 ГЕНЕРИРОВАТЬ КОНТЕКСТ")
+        self.btn_generate.setMinimumHeight(36)
+        self.btn_generate.clicked.connect(self._on_generate_clicked)
+        layout.addWidget(self.btn_generate)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+
+        self.status_label = QLabel("Готов к работе")
+        layout.addWidget(self.status_label)
 
     def _setup_completer(self) -> None:
         recent = list(self.settings.get("recent_projects", []))
@@ -296,8 +335,7 @@ class GeneratorTab(QWidget):
         if saved_unchecked:
             self.tree_model.set_unchecked_paths(saved_unchecked)
         if saved_expanded:
-            # Defer setExpanded — same reason as in _deferred_restore.
-            QTimer.singleShot(0, lambda e=list(saved_expanded): self._restore_expanded_paths(e))
+            self._schedule_expanded_restore(saved_expanded)
 
     def set_tree_data(self, files: list[tuple[str, str]]) -> None:
         """Пересобрать дерево из явного списка (для тестов/внешних вызовов)."""
@@ -306,21 +344,14 @@ class GeneratorTab(QWidget):
     # ---------- Tree state helpers ----------
 
     def _capture_expanded_paths(self) -> list[str]:
-        """Относительные пути всех раскрытых папок.
-
-        Обёрнуто в try/except: на некоторых Qt-сборках внутренние
-        persistent indices могут быть временно невалидны (особенно
-        сразу после reset_data). Безопаснее вернуть частичный
-        результат, чем уронить приложение.
-        """
+        """Относительные пути всех раскрытых папок."""
         result: list[str] = []
 
         def walk(index: QModelIndex) -> None:
             if not index.isValid():
                 return
             try:
-                node = index.internalPointer()
-                if node is not None and node.is_dir and self.tree_view.isExpanded(index):
+                if self.tree_model.is_dir(index) and self.tree_view.isExpanded(index):
                     result.append(self.tree_model.relative_path(index))
                 for i in range(self.tree_model.rowCount(index)):
                     walk(self.tree_model.index(i, 0, index))
@@ -334,11 +365,178 @@ class GeneratorTab(QWidget):
             print(f"Error capturing expanded paths: {e}")
         return result
 
+    def _schedule_expanded_restore(self, paths: list[str]) -> None:
+        """Отложить восстановление expanded на один тик event loop."""
+        self._pending_expanded_restore = list(paths)
+        self._restore_expanded_timer.start()
+
+    def _on_restore_expanded_timer(self) -> None:
+        paths = self._pending_expanded_restore
+        self._pending_expanded_restore = []
+        self._restore_expanded_paths(paths)
+
     def _restore_expanded_paths(self, paths: list[str]) -> None:
+        from shiboken6 import isValid
+
+        # Защита от гонки: таймер мог выстрелить после уничтожения
+        # C++ QTreeView/QAbstractItemModel (например, между тестами
+        # в pytest-qt). Без проверки createIndex/setExpanded на мёртвом
+        # C++ объекте даёт heap corruption.
+        try:
+            if not isValid(self) or not isValid(self.tree_view) or not isValid(self.tree_model):
+                return
+        except Exception:
+            return
+
         for rel in paths:
-            idx = self.tree_model.find_index(rel)
-            if idx.isValid():
-                self.tree_view.setExpanded(idx, True)
+            try:
+                idx = self.tree_model.find_index(rel)
+                if idx.isValid():
+                    self.tree_view.setExpanded(idx, True)
+            except RuntimeError:
+                return
+
+    # ---------- Generation (T-107) ----------
+    def stop_generation(self) -> None:
+        """Принудительно остановить фоновую генерацию (вызывается из
+        MainWindow.closeEvent перед удалением виджета).
+
+        Безопасен при повторном вызове и когда воркер не запущен.
+        """
+        thread = self._gen_thread
+        worker = self._gen_worker
+        self._gen_thread = None
+        self._gen_worker = None
+        if thread is not None:
+            try:
+                thread.requestInterruption()
+                thread.quit()
+                if not thread.wait(3000):
+                    thread.terminate()
+                    thread.wait(1000)
+            except RuntimeError:
+                pass
+        if worker is not None:
+            with contextlib.suppress(RuntimeError):
+                worker.deleteLater()
+
+    def _on_generate_clicked(self) -> None:
+        if self._gen_thread is not None:
+            self._request_generation_cancel()
+        else:
+            self._start_generation()
+
+    def _start_generation(self) -> None:
+        root = self.path_edit.text().strip()
+        if not root or not os.path.isdir(root):
+            self.status_label.setText("❌ Папка проекта не существует")
+            return
+
+        settings = self.settings.copy()
+        settings.update(self.collect_settings())
+        settings.setdefault("strict_mode", self.settings.get("strict_mode", False))
+        settings.setdefault("ignore_self", True)
+
+        # Blacklist: только явно снятые галочки
+        excluded = {os.path.normcase(os.path.abspath(p)) for p in self._excluded_file_paths()}
+        settings["excluded_paths"] = list(excluded)
+
+        self._gen_worker = GenerateWorker(settings, analyzer=self.analyzer)
+        self._gen_thread = QThread(self)
+        self._gen_worker.moveToThread(self._gen_thread)
+
+        self._gen_thread.started.connect(self._gen_worker.run)
+        self._gen_worker.progress.connect(self._on_generation_progress)
+        self._gen_worker.finished.connect(self._on_generation_finished)
+        self._gen_worker.error.connect(self._on_generation_error)
+        self._gen_worker.cancelled.connect(self._on_generation_cancelled)
+        # Cleanup в главном потоке после отработки любого исхода
+        for sig in (
+            self._gen_worker.finished,
+            self._gen_worker.error,
+            self._gen_worker.cancelled,
+        ):
+            sig.connect(self._cleanup_generation_thread)
+
+        self.btn_generate.setText("❌ ОТМЕНИТЬ ГЕНЕРАЦИЮ")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # indeterminate until first progress
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Поиск файлов…")
+
+        self._gen_thread.start()
+
+    def _request_generation_cancel(self) -> None:
+        if self._gen_thread is not None:
+            self._gen_thread.requestInterruption()
+            self.btn_generate.setText("ОТМЕНА…")
+            self.btn_generate.setEnabled(False)
+
+    def _excluded_file_paths(self) -> list[str]:
+        """Абсолютные пути явно снятых файлов (blacklist для generator)."""
+        result: list[str] = []
+        model = self.tree_model
+        root = model.root_path
+        if not root:
+            return result
+        for rel in model.unchecked_paths():
+            full = os.path.join(root, rel)
+            if os.path.isfile(full):
+                result.append(full)
+        return result
+
+    def _on_generation_progress(self, current: int, total: int) -> None:
+        if total > 0:
+            self.progress_bar.setRange(0, total)
+            self.progress_bar.setValue(current)
+            percent = int(current / total * 100)
+            self.status_label.setText(f"Обработка: {current}/{total} ({percent}%)")
+        else:
+            self.status_label.setText(f"Обработка: {current}")
+
+    def _on_generation_finished(self, path, count, lines, chars) -> None:
+        self.status_label.setText(f"✅ Готово! Файлов: {count} | Строк: {lines} | Символов: {chars}")
+        self.generation_finished.emit(path, count, lines, chars)
+        self._reset_generate_button()
+
+    def _on_generation_error(self, msg: str) -> None:
+        self.status_label.setText(f"❌ Ошибка: {msg}")
+        self.generation_error.emit(msg)
+        self._reset_generate_button()
+
+    def _on_generation_cancelled(self) -> None:
+        self.status_label.setText("⏹ Генерация отменена")
+        self.generation_cancelled.emit()
+        self._reset_generate_button()
+
+    def _reset_generate_button(self) -> None:
+        self.btn_generate.setText("🚀 ГЕНЕРИРОВАТЬ КОНТЕКСТ")
+        self.btn_generate.setEnabled(True)
+        self.progress_bar.setVisible(False)
+
+    def _cleanup_generation_thread(self, *_args) -> None:
+        # Обнуляем ссылки ДО wait/deleteLater: если wait() крутит event
+        # loop и сработает ещё один сигнал finished/cancelled, повторный
+        # вход увидит None и не сделает double-delete.
+        thread = self._gen_thread
+        worker = self._gen_worker
+        self._gen_thread = None
+        self._gen_worker = None
+        if thread is not None:
+            try:
+                thread.quit()
+                if not thread.wait(3000):
+                    thread.terminate()
+                    thread.wait(1000)
+            except RuntimeError as e:
+                # QThread wrapper might already be gone — не фатально.
+                print(f"thread cleanup: {e}")
+            # НЕ deleteLater: thread — child of GeneratorTab. Пусть
+            # родитель удалит его при своём teardown; ручной
+            # deleteLater() гоняется с qtbot.addWidget cleanup и даёт
+            # 'QThread: Destroyed while running'.
+        if worker is not None:
+            worker.deleteLater()
 
     # ---------- Handlers ----------
 

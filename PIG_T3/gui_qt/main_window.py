@@ -131,6 +131,11 @@ class MainWindow(QMainWindow):
         try:
             generator = self._tab_widgets.get("generator")
             if generator is not None:
+                # Останавливаем воркер ПЕРВЫМ, до сохранения —
+                # иначе QThread child может быть уничтожен раньше
+                # cleanup и дать qFatal abort.
+                if hasattr(generator, "stop_generation"):
+                    generator.stop_generation()
                 if hasattr(generator, "commit_recent_projects"):
                     generator.commit_recent_projects()
                 if hasattr(generator, "capture_tree_state"):
