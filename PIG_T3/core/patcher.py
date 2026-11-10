@@ -71,7 +71,7 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                 continue
             rel_path = action.get('source')
             abs_path = os.path.join(root_folder, rel_path)
-        elif action_type == 'mark_step_completed':
+        elif action_type in ('mark_step_completed', 'update_settings'):
             rel_path = None
             abs_path = None
         else:

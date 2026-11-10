@@ -48,7 +48,7 @@ jobs:
           uv run pytest tests/ -q --timeout=60 \
             --cov=PIG_T3 \
             --cov-report=term-missing \
-            --cov-fail-under=62
+            --cov-fail-under=67
 
       - name: Build executable
         run: uv run pyinstaller pig_t3.spec --noconfirm
