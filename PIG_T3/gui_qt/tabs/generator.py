@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 
 from ...core.analyzer import ProjectAnalyzer
 from ...utils.clipboard import copy_file_to_clipboard_windows
+from ..dialogs.optimize_dialog import OptimizeDialog
 from ..models.project_tree import ProjectTreeModel
 from ..widgets.project_tree_view import ProjectTreeView
 
@@ -193,6 +194,8 @@ class GeneratorTab(QWidget):
         tree_header = QHBoxLayout()
         tree_header.addWidget(QLabel("Структура проекта:"))
         tree_header.addStretch(1)
+        self.btn_optimize = QPushButton("✨ Оптимизация контекста")
+        tree_header.addWidget(self.btn_optimize)
         self.btn_refresh_tree = QPushButton("🔄 Обновить")
         tree_header.addWidget(self.btn_refresh_tree)
         layout.addLayout(tree_header)
@@ -248,6 +251,7 @@ class GeneratorTab(QWidget):
         self.btn_browse.clicked.connect(self.browse_folder)
         self.btn_auto.clicked.connect(self.auto_set_folder)
         self.btn_refresh_tree.clicked.connect(self.refresh_tree)
+        self.btn_optimize.clicked.connect(self.open_optimization_dialog)
 
         for edit in (self.path_edit, self.ext_edit, self.ignore_edit, self.output_edit):
             edit.textChanged.connect(self._on_field_changed)
@@ -265,6 +269,43 @@ class GeneratorTab(QWidget):
     def _on_options_toggled(self, checked: bool) -> None:
         self.options_widget.setVisible(checked)
         self.options_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+
+    def open_optimization_dialog(self) -> None:
+        """Открыть диалог оптимизации контекста.
+
+        T-109: только собирает параметры. Запуск воркера — T-110.
+        """
+        total_tokens = self._estimate_total_tokens()
+        dlg = OptimizeDialog(self.settings, total_tokens, parent=self)
+        if dlg.exec() == OptimizeDialog.DialogCode.Accepted:
+            self.settings.update(dlg.get_updated_settings())
+            self.settings_changed.emit()
+
+    def _estimate_total_tokens(self) -> int:
+        """Оценка размера контекста: сумма (размер .py / 4) по дереву.
+
+        Как в legacy: обходим все .py-файлы модели, не только
+        отмеченные. Fallback — 1000 токенов на пустом дереве.
+        """
+        total = 0
+
+        def walk(index: QModelIndex) -> None:
+            if not index.isValid():
+                return
+            if self.tree_model.is_dir(index):
+                for i in range(self.tree_model.rowCount(index)):
+                    walk(self.tree_model.index(i, 0, index))
+                return
+            rel = self.tree_model.relative_path(index)
+            if not rel.endswith(".py"):
+                return
+            full = os.path.join(self.tree_model.root_path, rel)
+            with contextlib.suppress(OSError):
+                total += os.path.getsize(full) // 4
+
+        for i in range(self.tree_model.rowCount(QModelIndex())):
+            walk(self.tree_model.index(i, 0, QModelIndex()))
+        return total or 1000
 
     # ---------- Public ----------
 

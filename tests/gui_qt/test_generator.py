@@ -727,3 +727,53 @@ def test_auto_copy_failure_shown_in_dialog(qtbot, tmp_path, monkeypatch):
     tab._on_generation_finished("/tmp/out.txt", 1, 10, 100)
     assert info
     assert "⚠️" in info[0]
+
+
+# ---------- T-109: кнопка «✨ Оптимизация контекста» ----------
+
+
+def test_btn_optimize_exists(settings, qtbot):
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    assert hasattr(tab, "btn_optimize")
+    assert "Оптимизация" in tab.btn_optimize.text()
+
+
+def test_btn_optimize_opens_dialog(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    opened: list = []
+
+    def _fake_exec(self_dlg):
+        opened.append(self_dlg)
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(gen_module.OptimizeDialog, "exec", _fake_exec)
+
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.btn_optimize.click()
+
+    assert opened, "диалог не открылся"
+    assert opened[0].total_tokens >= 1
+
+
+def test_estimate_total_tokens_falls_back(qtbot, tmp_path):
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    # пустая папка → fallback 1000
+    assert tab._estimate_total_tokens() >= 1000
