@@ -12,7 +12,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
-    QMessageBox,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from ..config import ConfigManager
 from .config_compat import save_migrated
+from .dialogs.settings_dialog import SettingsDialog
 from .tabs.editor import EditorTab
 from .tabs.generator import GeneratorTab
 from .tabs.info import InfoTab
@@ -121,11 +121,35 @@ class MainWindow(QMainWindow):
             return "v?.?.?"
 
     def _open_settings(self) -> None:
-        QMessageBox.information(
-            self,
-            "Настройки",
-            "Диалог настроек будет реализован на этапе 7.",
-        )
+        dlg = SettingsDialog(self.settings, parent=self)
+        if dlg.exec() != SettingsDialog.DialogCode.Accepted:
+            return
+        updated = dlg.get_updated_settings()
+        self.settings.update(updated)
+
+        # Применить без перезапуска
+        self._apply_theme_now()
+        self._apply_tab_visibility()
+        self._apply_row_height()
+
+    def _apply_theme_now(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        from .theme import apply_theme
+
+        apply_theme(QApplication.instance(), self.settings.get("theme", "dark"))
+
+    def _apply_tab_visibility(self) -> None:
+        vis = self.settings.get("tabs_visibility", {})
+        for i, key in enumerate(_TAB_KEYS):
+            self.tabs.setTabVisible(i, vis.get(key, True))
+
+    def _apply_row_height(self) -> None:
+        generator = self._tab_widgets.get("generator")
+        if generator is not None and hasattr(generator, "tree_view"):
+            h = int(self.settings.get("tree_row_height", 0) or 0)
+            if h > 0:
+                generator.tree_view.apply_row_height(h)
 
     def _on_generator_settings_changed(self) -> None:
         """Синхронизирует поля вкладки «Генератор» в self.settings
