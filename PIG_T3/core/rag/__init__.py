@@ -6,6 +6,8 @@ from .embeddings import (
     SentenceTransformersEmbeddings,
     make_embeddings_backend,
 )
+from .indexer import ProjectIndexer
+from .optimizer import RagOptimizer
 from .retriever import HybridRetriever, tokenize
 from .store import DimensionMismatchError, VectorStore
 
@@ -15,6 +17,8 @@ __all__ = [
     "EmbeddingsBackend",
     "HybridRetriever",
     "OllamaEmbeddings",
+    "ProjectIndexer",
+    "RagOptimizer",
     "SentenceTransformersEmbeddings",
     "VectorStore",
     "chunk_file",
