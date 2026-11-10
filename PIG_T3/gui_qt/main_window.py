@@ -24,6 +24,7 @@ from .config_compat import save_migrated
 from .tabs.editor import EditorTab
 from .tabs.generator import GeneratorTab
 from .tabs.info import InfoTab
+from .tabs.quality import QualityTab
 
 _TAB_KEYS = ["generator", "info", "editor", "plan", "quality"]
 
@@ -80,6 +81,8 @@ class MainWindow(QMainWindow):
                 widget = InfoTab()
             elif key == "editor":
                 widget = EditorTab(self.settings)
+            elif key == "quality":
+                widget = QualityTab()
             else:
                 widget = self._make_placeholder(_TAB_TITLES[key])
 
@@ -125,11 +128,19 @@ class MainWindow(QMainWindow):
         )
 
     def _on_generator_settings_changed(self) -> None:
-        """Синхронизирует поля вкладки «Генератор» в self.settings."""
+        """Синхронизирует поля вкладки «Генератор» в self.settings
+        и прокидывает путь в редактор / анализ кода."""
         generator = self._tab_widgets.get("generator")
         if generator is None:
             return
         self.settings.update(generator.collect_settings())
+        root = self.settings.get("root_folder", "")
+        editor = self._tab_widgets.get("editor")
+        if editor is not None and hasattr(editor, "set_path"):
+            editor.set_path(root)
+        quality = self._tab_widgets.get("quality")
+        if quality is not None and hasattr(quality, "set_path"):
+            quality.set_path(root)
 
     def closeEvent(self, event) -> None:
         try:
@@ -145,11 +156,13 @@ class MainWindow(QMainWindow):
             editor = self._tab_widgets.get("editor")
             if editor is not None and hasattr(editor, "stop_workers"):
                 editor.stop_workers()
-            if True:
-                if hasattr(generator, "commit_recent_projects"):
-                    generator.commit_recent_projects()
-                if hasattr(generator, "capture_tree_state"):
-                    self.settings.update(generator.capture_tree_state())
+            quality = self._tab_widgets.get("quality")
+            if quality is not None and hasattr(quality, "stop_scan"):
+                quality.stop_scan()
+            if hasattr(generator, "commit_recent_projects"):
+                generator.commit_recent_projects()
+            if hasattr(generator, "capture_tree_state"):
+                self.settings.update(generator.capture_tree_state())
             save_migrated(self.config, self.settings)
         except Exception as e:
             print(f"Ошибка сохранения настроек при выходе: {e}")
