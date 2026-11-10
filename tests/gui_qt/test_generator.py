@@ -150,3 +150,98 @@ def test_settings_changed_emitted_on_checkbox_toggle(settings, qtbot, cb_attr):
     cb = getattr(tab, cb_attr)
     with qtbot.waitSignal(tab.settings_changed, timeout=500):
         cb.toggle()
+
+
+# ---------- T-103: QCompleter для недавних проектов ----------
+
+
+def test_completer_attached_to_path_edit(settings, qtbot):
+    settings["recent_projects"] = ["/a", "/b", "/c"]
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    completer = tab.path_edit.completer()
+    assert completer is not None
+    assert completer.model().stringList() == ["/a", "/b", "/c"]
+
+
+def test_completer_empty_when_no_recent(qtbot):
+    tab = GeneratorTab({})
+    qtbot.addWidget(tab)
+    completer = tab.path_edit.completer()
+    assert completer is not None
+    assert completer.model().stringList() == []
+
+
+def test_commit_adds_current_path_to_front(settings, qtbot):
+    settings["recent_projects"] = ["/a", "/b"]
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.path_edit.setText("/new")
+    tab.commit_recent_projects()
+    assert tab.settings["recent_projects"] == ["/new", "/a", "/b"]
+
+
+def test_commit_dedupes_existing(settings, qtbot):
+    settings["recent_projects"] = ["/a", "/b", "/c"]
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.path_edit.setText("/b")
+    tab.commit_recent_projects()
+    assert tab.settings["recent_projects"] == ["/b", "/a", "/c"]
+
+
+def test_commit_caps_at_10(settings, qtbot):
+    settings["recent_projects"] = [f"/p{i}" for i in range(10)]
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.path_edit.setText("/new")
+    tab.commit_recent_projects()
+    recent = tab.settings["recent_projects"]
+    assert len(recent) == 10
+    assert recent[0] == "/new"
+    assert "/p9" not in recent  # самый старый вытеснен
+
+
+def test_commit_skips_empty(settings, qtbot):
+    settings["recent_projects"] = ["/a"]
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.path_edit.setText("   ")
+    tab.commit_recent_projects()
+    assert tab.settings["recent_projects"] == ["/a"]
+
+
+def test_commit_refreshes_completer(settings, qtbot):
+    settings["recent_projects"] = ["/a"]
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.path_edit.setText("/new")
+    tab.commit_recent_projects()
+    completer = tab.path_edit.completer()
+    assert completer.model().stringList() == ["/new", "/a"]
+
+
+def test_main_window_close_commits_recent(qtbot, tmp_path, monkeypatch):
+    """MainWindow.closeEvent вызывает commit_recent_projects перед save."""
+    from PIG_T3.config import ConfigManager
+    from PIG_T3.gui_qt.main_window import MainWindow
+    from PIG_T3.gui_qt.tabs.generator import GeneratorTab
+
+    cfg_path = tmp_path / "app_config.json"
+    config = ConfigManager()
+    monkeypatch.setattr(config, "config_file", str(cfg_path))
+
+    settings = {"recent_projects": ["/old"], "root_folder": "/default"}
+    window = MainWindow(config, settings)
+    qtbot.addWidget(window)
+
+    generator = window._tab_widgets["generator"]
+    assert isinstance(generator, GeneratorTab)
+    generator.path_edit.setText("/chosen")
+
+    window.close()
+
+    import json
+
+    saved = json.loads(cfg_path.read_text())
+    assert saved["recent_projects"][0] == "/chosen"

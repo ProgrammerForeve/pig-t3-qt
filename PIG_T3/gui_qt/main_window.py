@@ -1,4 +1,10 @@
-"""Главное окно: QMainWindow + QTabWidget с 5 вкладками-заглушками."""
+"""Главное окно: QMainWindow + QTabWidget.
+
+Вкладка «Генератор» реализована (T-101..T-103), остальные — заглушки
+до соответствующих задач (T-201, T-302, T-401, T-501).
+"""
+
+from __future__ import annotations
 
 from importlib import metadata
 
@@ -15,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from ..config import ConfigManager
 from .config_compat import save_migrated
+from .tabs.generator import GeneratorTab
 
 _TAB_KEYS = ["generator", "info", "editor", "plan", "quality"]
 
@@ -47,13 +54,16 @@ class MainWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.setCentralWidget(self.tabs)
 
-        self._tab_widgets: dict[str, QWidget] = {}
+        self._tab_widgets = {}
         for key in _TAB_KEYS:
-            widget = self._make_placeholder(_TAB_TITLES[key])
+            if key == "generator":
+                widget = GeneratorTab(self.settings)
+                widget.settings_changed.connect(self._on_generator_settings_changed)
+            else:
+                widget = self._make_placeholder(_TAB_TITLES[key])
             self._tab_widgets[key] = widget
             self.tabs.addTab(widget, _TAB_TITLES[key])
 
-        # Кнопка настроек в правом углу строки вкладок
         self.btn_settings = QToolButton()
         self.btn_settings.setText("⚙️")
         self.btn_settings.setToolTip("Настройки (этап 7)")
@@ -66,7 +76,7 @@ class MainWindow(QMainWindow):
     def _make_placeholder(self, text: str) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        label = QLabel(f"{text}\n\n(этап 1 — заглушка)")
+        label = QLabel(f"{text}\n\n(в разработке)")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
         return widget
@@ -95,8 +105,18 @@ class MainWindow(QMainWindow):
             "Диалог настроек будет реализован на этапе 7.",
         )
 
+    def _on_generator_settings_changed(self) -> None:
+        """Синхронизирует поля вкладки «Генератор» в self.settings."""
+        generator = self._tab_widgets.get("generator")
+        if generator is None:
+            return
+        self.settings.update(generator.collect_settings())
+
     def closeEvent(self, event) -> None:
         try:
+            generator = self._tab_widgets.get("generator")
+            if generator is not None and hasattr(generator, "commit_recent_projects"):
+                generator.commit_recent_projects()
             save_migrated(self.config, self.settings)
         except Exception as e:
             print(f"Ошибка сохранения настроек при выходе: {e}")

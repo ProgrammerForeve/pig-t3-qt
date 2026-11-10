@@ -1,12 +1,14 @@
-"""Вкладка «Генератор» — каркас (T-101) + опции генерации (T-102).
+"""Вкладка «Генератор» — каркас (T-101) + опции (T-102) + completer (T-103).
 
-Содержит поля ввода пути проекта, расширений, ignore-листа, имени отчёта
-и группу чекбоксов с опциями генерации. Не выполняет генерацию — это
-делает воркер (T-107).
+Содержит поля ввода пути проекта, расширений, ignore-листа, имени отчёта,
+группу чекбоксов с опциями генерации и QCompleter на пути проекта
+(недавние проекты). Не выполняет генерацию — это делает воркер (T-107).
 
 Публичный интерфейс:
 - ``GeneratorTab(settings: dict)`` — конструктор, читает значения из ``settings``
 - ``collect_settings() -> dict`` — собрать текущие значения в формате конфига
+- ``commit_recent_projects()`` — добавить текущий путь в recent_projects
+  (dedupe, cap 10), обновить completer; вызывается из MainWindow.closeEvent
 - ``settings_changed`` (Signal) — испускается при любом изменении поля/чекбокса
 """
 
@@ -15,9 +17,10 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QStringListModel, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QCompleter,
     QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -27,6 +30,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+_RECENT_PROJECTS_LIMIT = 10
 
 
 class GeneratorTab(QWidget):
@@ -55,6 +60,7 @@ class GeneratorTab(QWidget):
 
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("Путь к проекту…")
+        self._setup_completer()
         self.btn_browse = QPushButton("Обзор…")
         self.btn_auto = QPushButton("Авто")
         path_layout.addWidget(self.path_edit, 0, 0)
@@ -99,6 +105,14 @@ class GeneratorTab(QWidget):
         layout.addWidget(options_group)
 
         layout.addStretch(1)
+
+    def _setup_completer(self) -> None:
+        recent = list(self.settings.get("recent_projects", []))
+        self._completer_model = QStringListModel(recent)
+        completer = QCompleter(self._completer_model, self)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.path_edit.setCompleter(completer)
 
     def _checkboxes(self) -> tuple[QCheckBox, ...]:
         return (
@@ -149,6 +163,21 @@ class GeneratorTab(QWidget):
             "line_numbers": self.cb_line_numbers.isChecked(),
             "auto_copy_file": self.cb_auto_copy.isChecked(),
         }
+
+    def commit_recent_projects(self) -> None:
+        """Добавляет текущий путь в начало recent_projects.
+
+        Dedupe + cap _RECENT_PROJECTS_LIMIT. Обновляет completer.
+        Не делает ничего для пустой/whitespace-only строки.
+        """
+        current = self.path_edit.text().strip()
+        if not current:
+            return
+        recent = [p for p in self.settings.get("recent_projects", []) if p != current]
+        recent.insert(0, current)
+        recent = recent[:_RECENT_PROJECTS_LIMIT]
+        self.settings["recent_projects"] = recent
+        self._completer_model.setStringList(recent)
 
     # ---------- Handlers ----------
 
