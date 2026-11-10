@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from importlib import metadata
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -128,9 +128,7 @@ class MainWindow(QMainWindow):
         self._status_timer.timeout.connect(self._refresh_status_from_active_tab)
         self._status_timer.start()
 
-        self.tabs.currentChanged.connect(
-            lambda _idx: self._refresh_status_from_active_tab()
-        )
+        self.tabs.currentChanged.connect(lambda _idx: self._refresh_status_from_active_tab())
 
     def _refresh_status_from_active_tab(self) -> None:
         idx = self.tabs.currentIndex()
