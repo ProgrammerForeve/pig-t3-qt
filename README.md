@@ -1,188 +1,324 @@
-# 🐖 PIG-T3 – AI Context Generator & Patcher
+# 🐖 PIG-T3 — AI Context Generator & Patcher (форк)
 
-**PIG-T3** is a powerful desktop application (GUI) that helps you work with large codebases together with AI assistants (ChatGPT, Claude, DeepSeek, local Ollama models).
+Десктоп-приложение (**PySide6 + Qt-Material**) для работы с большими
+кодовыми базами вместе с AI-ассистентами (ChatGPT, Claude, DeepSeek,
+локальные модели Ollama).
 
-It generates a **context report** containing the full project structure and source code, ready to be sent to any LLM. It then allows you to **apply the AI's JSON-based code changes automatically** – including creating, editing, moving and deleting files – with full undo/redo support.
+Генерирует **отчёт-контекст** с полной структурой проекта и исходниками
+для отправки в LLM. Применяет **JSON-патчи от AI** автоматически
+(create / edit / move / delete) с undo/redo и бэкапами.
 
-Additionally, PIG-T3 includes:
-- 📝 **AI Plan Manager** – generate step-by-step implementation plans and execute them automatically.
-- 🔍 **Code Quality Scanner** – analyse your Python code (complexity, maintainability, lint score, security).
-- 🧠 **Context Optimizer** – select only the most relevant files for a given task using dependency graphs and AI ranking.
-- 🎨 **Multiple themes** (dark, light, pink, eye-care) and Git integration.
+Дополнительно:
+- 📝 **План проекта** — пошаговые планы из описания + автоматическое выполнение
+- 🔍 **Анализ кода** — офлайн-аудит Python (Radon CC/MI, Pylint, Bandit)
+- 🧠 **Оптимизация контекста** — отбор релевантных файлов через граф зависимостей + LLM-ранжирование
 
----
-
-## ✨ Features
-
-### 🏠 Context Generator
-- Scan a project folder, ignore binary/unwanted files, collect source code.
-- Produce a single `.txt` or `.md` file with XML-like tags for each file.
-- Optionally include line numbers and an AI instruction prompt for JSON patching.
-- Copy the output file directly to the clipboard.
-
-### ✏️ JSON Patcher (Editor)
-- Paste the LLM's response (JSON array of actions).
-- Validate and pretty-print the JSON.
-- Apply changes to the disk: **create**, **delete**, **move**, **edit** (replace_lines, insert_after_line, replace_text).
-- Built-in **Ollama Auto-Fix** – if the LLM returns malformed JSON, let a local model repair it.
-- Full **Undo/Redo** history (files are backed up inside `.pig/backups`).
-
-### 📝 AI Plan Manager
-- Describe your project goal in natural language – PIG-T3 will generate a detailed step-by-step plan.
-- Each step can be executed automatically:
-  - The app prepares an optimized context.
-  - An LLM (local or web) generates the necessary code changes in JSON format.
-  - Changes are applied immediately (or sent to the Editor for manual review).
-- Supports retries on errors, plan validation, and Git auto-commit before each step.
-
-### 📊 Code Quality Analysis
-- Scans all Python files in the project.
-- Calculates:
-  - **Cyclomatic Complexity** (Radon CC)
-  - **Maintainability Index** (Radon MI)
-  - **Pylint Score** (custom penalty-based score)
-  - **Security Issues** (Bandit)
-- Displays results in a sortable tree with color-coded statuses.
-
-### 🧠 Context Optimizer
-- Given a task description, selects the most important files for the AI to understand.
-- Uses a **dependency graph** (imports) with BFS and an **LLM-based relevance ranking**.
-- Helps keep the context size within token limits while retaining crucial information.
-
-### 🤖 Supported AI Backends
-- **Ollama** – any local model (e.g., `qwen2.5-coder`).
-- **Web APIs** – DeepSeek (Chat), Gemini (AI Studio) via browser automation.
-- **BomjAPI** – a manual testing tool (opens a window where you paste responses by hand).
+**Это форк.** Оригинальный PIG-T3 — `pip install pig-t3`.
+GUI переписан с Tkinter на PySide6 в v2.0.0. См. [docs/adr/](docs/adr/).
 
 ---
 
-## 📦 Installation
+## ✨ Возможности
 
-PIG-T3 requires **Python 3.8+**. Install directly from PyPI:
+### 🏠 Генератор
+- Сканирование папки, ignore-лист, фильтр по расширениям.
+- Один `.txt` с XML-тегами `<file path="...">`.
+- Опции: нумерация строк, инструкция для AI, пустые папки, авто-копирование.
+- **Дерево с нативными чекбоксами** — клик по строке = toggle (папка каскадом).
+  «🌐 Весь проект» — tristate select-all. Состояние сохраняется в `.pig/state.json`.
+- **Оптимизация контекста** — задача, % сжатия, BFS-глубина, модель.
+
+### ✏️ Редактор (JSON Patcher)
+- Вставка JSON-ответа LLM, валидация, pretty-print.
+- Действия: `create`, `edit`, `move`, `delete`.
+- Undo/Redo с бэкапами в `.pig/backups/<uuid>/{before,after}/` (лимит 10).
+- **Auto-Fix** — починка битого JSON через Ollama / Web / BomjAPI.
+
+### 📝 План
+- Генерация плана из концепции (`GeneratePlanWorker`).
+- Выполнение шага (`PlanStepWorker`): контекст → LLM → JSON → apply.
+- Retry (2 попытки), выполнение всего плана с прогрессом и остановкой.
+- **Git** — auto-commit перед шагом, опционально push.
+
+### 📊 Анализ кода
+- Radon CC, Radon MI, Pylint Score, Bandit — в фоне, с отменой.
+- `QTableView` с цветовой индикацией, панель деталей.
+- Свёрнутый вид — только `path` + сортируемая метрика.
+
+### ⚙️ Настройки
+- Тема, шрифт, высота строк, вес оптимизатора, Git, LLM-таймауты,
+  видимость вкладок. Применяются без перезапуска.
+
+### 🤖 Бэкенды LLM
+
+| Бэкенд | Где работает |
+| :--- | :--- |
+| Ollama | Локально (`qwen2.5-coder` и др.) |
+| Web: DeepSeek | chat.deepseek.com через Playwright |
+| Web: Gemini | AI Studio через Playwright |
+| BomjAPI | Ручной ввод (промпт/ответ) для любого веб-чата |
+
+---
+
+## 📦 Установка (форк)
+
+Требуется **Python 3.10+** и **uv** (или `pip`).
 
 ```bash
-pip install pig-t3
+git clone https://github.com/ProgrammerForeve/pig-t3-qt pig-t3-fork
+cd pig-t3-fork
+uv sync --extra dev          # runtime + dev + PySide6 + qt-material
 ```
 
-If you plan to use the **Web API** backends (DeepSeek, Gemini), you also need to install a Chromium browser for Playwright:
+Для Web-бэкендов:
 
 ```bash
-playwright install chromium
+uv run playwright install chromium
 ```
 
-### Dependencies
-These are installed automatically:
-`requests`, `radon`, `pylint`, `vulture`, `bandit`, `Pillow`, `majorchik-api` (Playwright-based web automation), `networkx`.
+**Не** ставится через `pip install pig-t3` — это оригинал, здесь другой код.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Быстрый старт
 
-1. Launch the application:
-   ```bash
-   pig-t3
-   ```
-2. Select your project folder (or let it auto-detect).
-3. In the **Generator** tab, optionally adjust extensions and ignore list, then click **Generate Context**.
-4. Copy the generated file and send it to your favourite AI assistant.
-5. Paste the AI's JSON response into the **Editor** tab, click **Apply Changes**.
+Точки входа:
+
+```bash
+uv run python -m PIG_T3      # как модуль
+uv run python run.py         # из корня репо
+uv run pig-t3                # console script (если ставили через pip install -e .)
+./dist/PIG-T3                # после сборки PyInstaller
+```
+
+Флоу:
+
+1. **Генератор** → выбрать папку → «ГЕНЕРИРОВАТЬ КОНТЕКСТ» → `project_context.txt`.
+2. Отправить файл в чат с AI.
+3. **Редактор** → вставить JSON-ответ → «Проверить» → «Применить».
+4. Или **План** — описать цель, выполнить шаги.
 
 ---
 
-## 🧩 How It Works
+## 🧩 JSON-формат
 
-### Workflow
-1. **Scan** → Collect all source files into a single report.
-2. **Send** → The report is given to an LLM along with the editing instructions (optionally).
-3. **Receive JSON** → The LLM returns a JSON array of file operations.
-4. **Apply** → PIG-T3 parses the JSON, backs up affected files, and performs the changes.
-
-### JSON Actions Reference
-A typical LLM response looks like this:
+Ответ LLM — JSON **массив**:
 
 ```json
 [
-  {
-    "action": "create",
-    "path": "utils/helper.py",
-    "content": "def help():\n    return True"
-  },
+  {"action": "update_settings", "extensions": ".py, .json", "ignore_list": "venv, .git"},
+  {"action": "create", "path": "utils/h.py", "content": "def f():\n    return True\n"},
+  {"action": "delete", "path": "old.py"},
+  {"action": "move", "source": "old/f.py", "destination": "new/f.py"},
   {
     "action": "edit",
     "path": "main.py",
     "operations": [
-      {
-        "type": "replace_lines",
-        "start": 10,
-        "end": 12,
-        "content": "    new_code()"
-      },
-      {
-        "type": "insert_after_line",
-        "line": 15,
-        "content": "    logger.info('Done')"
-      }
+      {"type": "replace_lines", "start": 10, "end": 12, "content": "    new_code()\n"},
+      {"type": "insert_after_line", "line": 15, "content": "    print('x')\n"}
     ]
-  }
+  },
+  {"action": "mark_step_completed", "step_id": "step_1", "completed": true}
 ]
 ```
 
-Full specification is available in the **Info / JSON Specs** tab inside the app.
+⚠️ Для существующих файлов — **только** `edit`, не `create`.
+В `replace_lines` не включайте неизменные соседние строки — будут дубли.
+
+Полная спецификация — во вкладке **Инфо**.
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Конфигурация
 
-All settings are saved in `app_config.json` (global) and in `.pig/state.json` (per project).
-You can tweak:
-- Theme, font size, tree row height.
-- Context optimizer parameters (BFS depth, LLM weighting).
-- Git integration (auto-commit, auto-push, branch mode).
-- LLM timeouts and retry settings.
+| Файл | Что хранит |
+| :--- | :--- |
+| `app_config.json` | тема, шрифт, веса оптимизатора, Git, таймауты, `tabs_visibility`, `recent_projects` |
+| `.pig/state.json` | `ui_tree_expanded`, `ui_tree_unchecked`, `history_stack`, `redo_stack` (per-project) |
+| `.pig/plan.json` | план проекта |
+| `.pig/backups/<uuid>/{before,after}/` | снапшоты для undo/redo |
 
----
+**Миграция тем:** `pink` / `eye_care` → `light`, `dark_pink` → `dark`
+при первой загрузке. `ui_scale` удаляется.
 
-## 🐙 Git Integration
-
-When enabled in settings, PIG-T3 can:
-- Automatically create a new Git branch before executing a plan step.
-- Commit all changes with a descriptive message.
-- Push to remote after each successful step.
+Дерево: expand/uncheck восстанавливаются между запусками и **не сбрасываются**
+при изменении extensions/ignore (если папка проекта не менялась).
 
 ---
 
-## 🧪 Development & Building
+## 🐙 Git
 
-To build a standalone executable:
+Включается в **Настройки → Функционал → Git**. Перед шагом плана:
 
 ```bash
-pyinstaller pig_t3.spec --noconfirm
+git add -A
+git checkout -b pig_plan_<ts>    # если git_branch_mode == "new"
+git commit -m "PIG-T3: auto-save before plan execution (<ts>)"
+git push origin HEAD              # если git_auto_push == true
 ```
 
-The spec bundles PySide6, qt-material stylesheets, application icons
-and the quality-scan / context-optimizer dependencies. Output:
+Если `git` нет или папка вне репо — интеграция молча пропускается.
+
+---
+
+## 🧪 Разработка
+
+```bash
+uv run pre-commit install     # хуки в .git/hooks/
+./check.sh                    # ruff + pytest (быстро)
+./check.sh --fix              # ruff --fix + format + pytest
+```
+
+**Lint-скоуп:** `PIG_T3/gui_qt`, `PIG_T3/config.py`, `tests/`.
+Legacy `PIG_T3/core/*`, `PIG_T3/utils/*` исключены (ADR-005).
+
+**Pre-commit** (при каждом `git commit`):
+- EOF, trailing-whitespace, merge-conflict, large-files
+- `ruff` + `ruff-format` (только in-scope)
+- `pytest tests/ -q --timeout=30 -x` (~10 сек, стоп на первом падении)
+
+Обход: `git commit --no-verify`.
+
+**Тесты:**
+
+```bash
+uv run pytest tests/ -v
+uv run pytest tests/gui_qt/test_generator.py
+uv run pytest -k threading
+```
+
+Покрытие:
+- unit — модели, воркеры, диалоги
+- **QThread-контракт** — сигналы, отдельный поток, UI не блокируется, отмена, без утечек
+- **smoke** — все 5 вкладок нужных классов, нет `tkinter` и legacy-импортов
+
+---
+
+## 📦 Сборка
+
+```bash
+uv run pyinstaller pig_t3.spec --noconfirm
+```
 
 - Linux: `dist/PIG-T3`
 - Windows: `dist/PIG-T3.exe`
-- macOS: `dist/PIG-T3` (unsigned; `xattr -dr com.apple.quarantine dist/PIG-T3`
-  after copying to another machine)
+- macOS: `dist/PIG-T3` (unsigned, `xattr -dr com.apple.quarantine` после переноса)
+
+Спек бандлит PySide6, qt-material, иконки, зависимости анализатора.
+
+**CI** — `.github/workflows/build.yml` на каждый push в `master` и тег `v*`:
+
+| OS | Шаги | Артефакт |
+| :--- | :--- | :--- |
+| Ubuntu | Qt libs → pytest → build | `PIG-T3-linux` |
+| Windows | deps → build | `PIG-T3-windows` |
+
+Скачивать: **Actions → Build → Artifacts**.
+
+---
+
+## 🏗️ Архитектура
+
+- **[`CONTEXT.md`](CONTEXT.md)** — глоссарий (вкладки, воркеры, модели, LLM-обёртки, файлы состояния), публичные API вкладок, чек-лист «как добавить вкладку».
+- **[`docs/adr/`](docs/adr/)** — 10 ADR (PySide6, Qt-Material, QThread, QAbstractItemModel, scope, config compat, hotkeys, dialog wrappers, quintptr internalId, os._exit).
+
+```
+PIG_T3/
+├── config.py                  # ConfigManager
+├── main.py                    # entry point
+├── core/                      # Бизнес-логика (без изменений при миграции)
+│   ├── analyzer.py
+│   ├── context_optimizer.py
+│   ├── patcher.py
+│   ├── ollama_client.py
+│   ├── dependency_graph.py
+│   ├── plan_validator.py
+│   └── quality/               # radon/pylint/bandit
+├── utils/                     # clipboard, dep_installer, web APIs, BomjAPI
+└── gui_qt/                    # PySide6 GUI
+    ├── app.py
+    ├── main_window.py
+    ├── theme.py
+    ├── config_compat.py
+    ├── tabs/                  # generator, info, editor, plan, quality
+    ├── workers/               # 7 QThread-воркеров + llm_wrappers
+    ├── models/                # project_tree, quality_table
+    ├── widgets/               # project_tree_view
+    └── dialogs/               # optimize, settings, new_plan
 ```
 
----
-
-## 📄 License
-
-PIG-T3 is released under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+**Добавить вкладку** — см. `CONTEXT.md`. Кратко:
+`tabs/<name>.py` → экспорт в `tabs/__init__.py` → ключ в `_TAB_KEYS` /
+`_TAB_TITLES` → ветка в `_setup_tabs` → `stop_workers()` в `closeEvent`.
 
 ---
 
-## 🙏 Acknowledgements
+## 🩺 Проблемы
 
-This project uses several open-source libraries and tools:
-Radon, Pylint, Vulture, Bandit, NetworkX, Playwright, and others.
-Special thanks to the Ollama project for local AI capabilities.
+**`free(): invalid size` при выходе** — историческая проблема (T-107),
+исправлена на 5 уровнях (ADR-009, ADR-010). Если вернулась — запустить с
+`PIG_NO_SPLASH=1`, посмотреть `/tmp/pig_crash.log` (Linux) или
+`%TEMP%\pig_crash.log` (Windows).
+
+**`Gtk-Message: Failed to load module "xapp-gtk3-module"`** — безвредное
+предупреждение GTK (Mint / XApps). Игнорировать или
+`sudo apt install libxapp-gtk3-module`.
+
+**Ctrl+C / Ctrl+V не работают** — не должно быть (ADR-007, нативные
+Qt-хэндлеры). Сообщите файл и виджет.
+
+**Тема «сломалась» после обновления** — `pink`/`eye_care` → `light`,
+`dark_pink` → `dark` (ADR-002). Сменить акцент: `_QT_MATERIAL` в
+`gui_qt/theme.py` (`dark_teal.xml`, `dark_blue.xml`, `light_teal.xml`,
+`light_blue.xml`).
+
+**PyInstaller: `attempted relative import`** — собирайте **только**
+через `pyinstaller pig_t3.spec`, не `PIG_T3/main.py` (T-703).
 
 ---
 
-> Made with ❤️ by Loki (gosoftware2025@gmail.com)
-> updated by ProgrammeForever
+## Changelog
+
+### v2.0.0 — миграция на PySide6 (2026-11)
+
+**Breaking:**
+- GUI: Tkinter → PySide6 + Qt-Material
+- Темы `pink` / `eye_care` / `dark_pink` удалены (миграция в `light`/`dark`)
+- Ключ `ui_scale` удалён
+
+**New:**
+- 5 рабочих вкладок (Генератор / Инфо / Редактор / План / Анализ)
+- 7 QThread-воркеров с контрактом
+- 2 `QAbstractItemModel` (дерево tristate, таблица с proxy-сортировкой)
+- 3 LLM-обёртки (Ollama / Web / BomjAPI)
+- PyInstaller (Linux + Windows, CI-матрица)
+- Pre-commit (ruff + pytest + hygiene)
+- 10 ADR + `CONTEXT.md`
+- 275+ тестов
+
+**Cleanup:**
+- `PIG_T3/gui/` удалён (ADR-005 / T-008)
+- `PKG-INFO` untracked
+
+### v1.x — Tkinter GUI (предыдущая версия)
+
+Контекст-генератор, JSON-патчер, план, анализ, оптимизатор — всё на
+Tkinter. Заменено в v2.0.0.
+
+---
+
+## 📄 Лицензия
+
+MIT — см. [LICENSE](LICENSE).
+
+---
+
+## 🙏 Благодарности
+
+PySide6, Qt-Material, Radon, Pylint, Vulture, Bandit, NetworkX, Playwright,
+Ollama.
+
+---
+
+> Форк. Оригинал: `pip install pig-t3`.
+> Автор оригинального PIG-T3 — Loki (gosoftware2025@gmail.com).
