@@ -5,3 +5,9 @@ app_config.json
 project_context.txt
 check.log
 pig_t3.egg-info/
+
+# PyInstaller
+build/
+dist/
+*.manifest
+*.spec.bak

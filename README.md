@@ -153,10 +153,19 @@ When enabled in settings, PIG-T3 can:
 
 ## 🧪 Development & Building
 
-To build a standalone executable (Windows):
+To build a standalone executable:
 
 ```bash
-pyinstaller --noconsole --onefile --icon=PIG_T3/icon.png --add-data "PIG_T3/logo.png;." --add-data "PIG_T3/icon.png;." --name PIG PIG_T3/main.py
+pyinstaller pig_t3.spec --noconfirm
+```
+
+The spec bundles PySide6, qt-material stylesheets, application icons
+and the quality-scan / context-optimizer dependencies. Output:
+
+- Linux: `dist/PIG-T3`
+- Windows: `dist/PIG-T3.exe`
+- macOS: `dist/PIG-T3` (unsigned; `xattr -dr com.apple.quarantine dist/PIG-T3`
+  after copying to another machine)
 ```
 
 ---
