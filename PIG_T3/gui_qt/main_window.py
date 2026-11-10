@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from ..config import ConfigManager
 from .config_compat import save_migrated
 from .tabs.generator import GeneratorTab
+from .tabs.info import InfoTab
 
 _TAB_KEYS = ["generator", "info", "editor", "plan", "quality"]
 
@@ -74,10 +75,10 @@ class MainWindow(QMainWindow):
             if key == "generator":
                 widget = GeneratorTab(self.settings)
                 widget.settings_changed.connect(self._on_generator_settings_changed)
+            elif key == "info":
+                widget = InfoTab()
             else:
                 widget = self._make_placeholder(_TAB_TITLES[key])
-            self._tab_widgets[key] = widget
-            self.tabs.addTab(widget, _TAB_TITLES[key])
 
         self.btn_settings = QToolButton()
         self.btn_settings.setText("⚙️")
