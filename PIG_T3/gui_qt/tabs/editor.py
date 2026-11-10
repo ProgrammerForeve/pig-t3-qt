@@ -1,0 +1,364 @@
+"""Вкладка «✏️ Редактор (JSON Patcher)» (T-302..T-307).
+
+Публичный интерфейс:
+- ``set_path(folder)`` — синхронизация пути с вкладкой Генератора
+- ``load_json(text)`` — вставить JSON (используется планом)
+- ``_on_validate``, ``_on_apply``, ``_on_undo``, ``_on_redo``
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import (
+    QComboBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ...core.patcher import clean_json_text
+from ..workers.apply_worker import ApplyWorker, UndoRedoWorker
+
+_HISTORY_LIMIT = 10
+
+
+def _show_info(parent, title: str, text: str) -> None:
+    QMessageBox.information(parent, title, text)
+
+
+def _show_error(parent, title: str, text: str) -> None:
+    QMessageBox.critical(parent, title, text)
+
+
+def _show_yes_no(parent, title: str, text: str) -> bool:
+    r = QMessageBox.question(
+        parent,
+        title,
+        text,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return r == QMessageBox.StandardButton.Yes
+
+
+class EditorTab(QWidget):
+    """Редактор JSON-патча + Undo/Redo + авто-фикс (заглушка T-307)."""
+
+    undo_available_changed = Signal(bool)
+    redo_available_changed = Signal(bool)
+
+    def __init__(self, settings: dict, parent=None):
+        super().__init__(parent)
+        self.settings = dict(settings)
+        self.history_stack: list[dict] = []
+        self.redo_stack: list[dict] = []
+        self._last_applied_content: str | None = None
+        self._current_path: str = self.settings.get("root_folder", "")
+
+        self._apply_thread: QThread | None = None
+        self._apply_worker: ApplyWorker | None = None
+        self._undo_thread: QThread | None = None
+        self._undo_worker: UndoRedoWorker | None = None
+
+        self._setup_ui()
+        self._populate()
+        self._connect_signals()
+
+    # ---------- UI ----------
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Целевая папка:"))
+        self.path_edit = QLineEdit(self._current_path)
+        self.path_edit.setReadOnly(True)
+        top.addWidget(self.path_edit, 1)
+        self.btn_redo = QPushButton("↪ Повторить")
+        self.btn_undo = QPushButton("↩ Отменить")
+        self.btn_redo.setEnabled(False)
+        self.btn_undo.setEnabled(False)
+        top.addWidget(self.btn_redo)
+        top.addWidget(self.btn_undo)
+        layout.addLayout(top)
+
+        layout.addWidget(QLabel("Вставьте JSON-ответ от AI (можно с ```json):"))
+        self.editor_text = QPlainTextEdit()
+        self.editor_text.setPlaceholderText("[{...}, {...}]")
+        layout.addWidget(self.editor_text, 1)
+
+        # Ollama settings (упрощённо — модель + 3 ключевых параметра)
+        ollama_group = QGroupBox("🛠️ Ollama Auto-Fix (Локальная LLM)")
+        ollama_layout = QVBoxLayout(ollama_group)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Модель:"))
+        self.model_combo = QComboBox()
+        self._populate_models()
+        row1.addWidget(self.model_combo, 1)
+        ollama_layout.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self.ctx_edit = QLineEdit()
+        self.pred_edit = QLineEdit()
+        self.temp_edit = QLineEdit()
+        for label, edit in (
+            ("Ctx:", self.ctx_edit),
+            ("Predict:", self.pred_edit),
+            ("Temp:", self.temp_edit),
+        ):
+            row2.addWidget(QLabel(label))
+            edit.setMaximumWidth(80)
+            row2.addWidget(edit)
+        row2.addStretch(1)
+        ollama_layout.addLayout(row2)
+        layout.addWidget(ollama_group)
+
+        btn_row = QHBoxLayout()
+        self.btn_paste = QPushButton("📋 Вставить")
+        self.btn_validate = QPushButton("🔍 Проверить / Форматировать")
+        self.btn_apply = QPushButton("ПРИМЕНИТЬ ИЗМЕНЕНИЯ")
+        btn_row.addWidget(self.btn_paste)
+        btn_row.addWidget(self.btn_validate)
+        btn_row.addWidget(self.btn_apply, 1)
+        layout.addLayout(btn_row)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #e5c07b;")
+        layout.addWidget(self.status_label)
+
+    def _populate_models(self) -> None:
+        web_models = [
+            "Web: Gemini",
+            "Web: DeepSeek",
+            "Web: DeepSeek (DeepThink)",
+            "Web: DeepSeek Expert",
+            "Web: DeepSeek Expert (DeepThink)",
+        ]
+        models = ["None", "BomjAPI", *web_models]
+        # Ollama может быть не запущена — молча пропускаем
+        with contextlib.suppress(Exception):
+            from ...core.ollama_client import get_installed_models
+
+            models.extend(get_installed_models())
+        self.model_combo.addItems(models)
+
+    def _populate(self) -> None:
+        opts = self.settings.get("ollama_options", {})
+        self.ctx_edit.setText(str(opts.get("num_ctx", 24000)))
+        self.pred_edit.setText(str(opts.get("num_predict", 12000)))
+        self.temp_edit.setText(str(opts.get("temperature", 0.5)))
+        current = self.settings.get("ollama_model", "None")
+        idx = self.model_combo.findText(current)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+
+    def _connect_signals(self) -> None:
+        self.btn_paste.clicked.connect(self._on_paste)
+        self.btn_validate.clicked.connect(self._on_validate)
+        self.btn_apply.clicked.connect(self._on_apply)
+        self.btn_undo.clicked.connect(self._on_undo)
+        self.btn_redo.clicked.connect(self._on_redo)
+
+    # ---------- Public ----------
+
+    def set_path(self, folder: str) -> None:
+        self._current_path = folder or ""
+        self.path_edit.setText(self._current_path)
+
+    def load_json(self, text: str) -> None:
+        self.editor_text.setPlainText(text)
+        self._on_validate()
+
+    # ---------- Handlers ----------
+
+    def _on_paste(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        text = QApplication.clipboard().text()
+        if not text:
+            self.status_label.setText("⚠️ Буфер пуст")
+            return
+        self.editor_text.setPlainText(text)
+        self.status_label.setText("📋 Вставлено из буфера")
+
+    def _on_validate(self) -> bool:
+        raw = self.editor_text.toPlainText().strip()
+        if not raw:
+            self.status_label.setText("Пустое поле.")
+            return False
+        cleaned = clean_json_text(raw)
+        try:
+            data = json.loads(cleaned)
+            if not isinstance(data, list):
+                raise ValueError("JSON должен быть списком.")
+            pretty = json.dumps(data, indent=2, ensure_ascii=False)
+            self.editor_text.setPlainText(pretty)
+            self.status_label.setText(f"✅ Валидный JSON. Операций: {len(data)}")
+            return True
+        except Exception as e:
+            self.status_label.setText(f"❌ Ошибка JSON: {e}")
+            return False
+
+    def _on_apply(self) -> None:
+        if not self._on_validate():
+            return
+        if not self._current_path or not os.path.isdir(self._current_path):
+            _show_error(self, "Ошибка", "Папка проекта не существует.")
+            return
+        raw = self.editor_text.toPlainText().strip()
+        if self._last_applied_content == raw and not _show_yes_no(
+            self,
+            "Подтверждение",
+            "Эти изменения уже применялись. Повторить?",
+        ):
+            return
+        self._last_applied_content = raw
+
+        self.btn_apply.setEnabled(False)
+        self.btn_apply.setText("Применение...")
+
+        self._apply_worker = ApplyWorker(raw, self._current_path)
+        self._apply_thread = QThread(self)
+        self._apply_worker.moveToThread(self._apply_thread)
+        self._apply_thread.started.connect(self._apply_worker.run)
+        self._apply_worker.done.connect(self._on_apply_done)
+        self._apply_worker.error.connect(self._on_apply_error)
+        for sig in (self._apply_worker.done, self._apply_worker.error):
+            sig.connect(self._cleanup_apply_thread)
+        self._apply_thread.start()
+
+    def _on_apply_done(self, log: str, record: dict) -> None:
+        self.history_stack.append(record)
+        if len(self.history_stack) > _HISTORY_LIMIT:
+            oldest = self.history_stack.pop(0)
+            # Бэкап мог быть уже удалён вручную — не критично
+            with contextlib.suppress(Exception):
+                import shutil
+
+                shutil.rmtree(
+                    os.path.join(
+                        self._current_path,
+                        ".pig",
+                        "backups",
+                        oldest["id"],
+                    ),
+                    ignore_errors=True,
+                )
+        self.redo_stack.clear()
+        self._update_undo_redo()
+        self._show_result_dialog(log)
+
+    def _on_apply_error(self, msg: str) -> None:
+        _show_error(self, "Ошибка применения", msg)
+        self.status_label.setText(f"❌ {msg}")
+
+    def _show_result_dialog(self, log: str) -> None:
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit, QVBoxLayout
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Результат патча")
+        dlg.resize(700, 500)
+        layout = QVBoxLayout(dlg)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(log)
+        layout.addWidget(text)
+        dlg.exec()
+        dlg.deleteLater()
+
+    def _on_undo(self) -> None:
+        if not self.history_stack:
+            return
+        record = self.history_stack.pop()
+        self.redo_stack.append(record)
+        self._update_undo_redo()
+        self.status_label.setText("⏳ Отмена...")
+        self._start_undo_redo(record, "undo")
+
+    def _on_redo(self) -> None:
+        if not self.redo_stack:
+            return
+        record = self.redo_stack.pop()
+        self.history_stack.append(record)
+        self._update_undo_redo()
+        self.status_label.setText("⏳ Повтор...")
+        self._start_undo_redo(record, "redo")
+
+    def _start_undo_redo(self, record: dict, action: str) -> None:
+        self.btn_apply.setEnabled(False)
+        self._undo_worker = UndoRedoWorker(self._current_path, record, action)
+        self._undo_thread = QThread(self)
+        self._undo_worker.moveToThread(self._undo_thread)
+        self._undo_thread.started.connect(self._undo_worker.run)
+        self._undo_worker.done.connect(self._on_undo_redo_done)
+        self._undo_worker.error.connect(self._on_undo_redo_error)
+        for sig in (self._undo_worker.done, self._undo_worker.error):
+            sig.connect(self._cleanup_undo_thread)
+        self._undo_thread.start()
+
+    def _on_undo_redo_done(self, msg: str) -> None:
+        self.status_label.setText(f"✅ {msg}")
+        record = self.history_stack[-1] if self.history_stack else (self.redo_stack[-1] if self.redo_stack else None)
+        if record:
+            self.editor_text.setPlainText(record["llm_text"])
+            self._on_validate()
+
+    def _on_undo_redo_error(self, msg: str) -> None:
+        self.status_label.setText(f"❌ {msg}")
+        _show_error(self, "Ошибка", msg)
+
+    def _update_undo_redo(self) -> None:
+        self.btn_undo.setEnabled(bool(self.history_stack))
+        self.btn_redo.setEnabled(bool(self.redo_stack))
+        self.undo_available_changed.emit(bool(self.history_stack))
+        self.redo_available_changed.emit(bool(self.redo_stack))
+
+    # ---------- Cleanup ----------
+
+    def _cleanup_apply_thread(self, *_args) -> None:
+        thread = self._apply_thread
+        self._apply_thread = None
+        self._apply_worker = None
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except RuntimeError:
+                pass
+        self.btn_apply.setEnabled(True)
+        self.btn_apply.setText("ПРИМЕНИТЬ ИЗМЕНЕНИЯ")
+
+    def _cleanup_undo_thread(self, *_args) -> None:
+        thread = self._undo_thread
+        self._undo_thread = None
+        self._undo_worker = None
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except RuntimeError:
+                pass
+        self.btn_apply.setEnabled(True)
+
+    def stop_workers(self) -> None:
+        """Остановка для MainWindow.closeEvent."""
+        for thread_attr in ("_apply_thread", "_undo_thread"):
+            thread = getattr(self, thread_attr, None)
+            if thread is not None:
+                try:
+                    thread.quit()
+                    thread.wait(2000)
+                except RuntimeError:
+                    pass
+                setattr(self, thread_attr, None)

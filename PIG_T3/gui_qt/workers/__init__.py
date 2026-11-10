@@ -1,5 +1,6 @@
 """QThread-воркеры и LLM-обёртки PIG-T3."""
 
+from .apply_worker import ApplyWorker, UndoRedoWorker
 from .generate_worker import GenerateWorker
 from .llm_wrappers import (
     BomjWrapper,
@@ -10,10 +11,12 @@ from .llm_wrappers import (
 from .optimize_worker import OptimizeWorker
 
 __all__ = [
+    "ApplyWorker",
     "BomjWrapper",
     "GenerateWorker",
     "OllamaWrapper",
     "OptimizeWorker",
+    "UndoRedoWorker",
     "WebWrapper",
     "make_llm_client",
 ]

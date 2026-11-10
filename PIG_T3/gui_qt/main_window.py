@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from ..config import ConfigManager
 from .config_compat import save_migrated
+from .tabs.editor import EditorTab
 from .tabs.generator import GeneratorTab
 from .tabs.info import InfoTab
 
@@ -77,6 +78,8 @@ class MainWindow(QMainWindow):
                 widget.settings_changed.connect(self._on_generator_settings_changed)
             elif key == "info":
                 widget = InfoTab()
+            elif key == "editor":
+                widget = EditorTab(self.settings)
             else:
                 widget = self._make_placeholder(_TAB_TITLES[key])
 
@@ -139,6 +142,10 @@ class MainWindow(QMainWindow):
                     generator.stop_generation()
                 if hasattr(generator, "stop_optimization"):
                     generator.stop_optimization()
+            editor = self._tab_widgets.get("editor")
+            if editor is not None and hasattr(editor, "stop_workers"):
+                editor.stop_workers()
+            if True:
                 if hasattr(generator, "commit_recent_projects"):
                     generator.commit_recent_projects()
                 if hasattr(generator, "capture_tree_state"):
