@@ -22,6 +22,8 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
+    "sqlite-vec>=0.1.6",
+    "rank-bm25>=0.2.2",
     "watchdog>=4.0",
     "requests",
     "radon",
