@@ -1,20 +1,40 @@
+import json
 import os
 import sys
-import json
 
 # Константа расширений
 EXTENSION_TO_MARKDOWN = {
-    '.cs': 'csharp', '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
-    '.html': 'html', '.css': 'css', '.json': 'json', '.xml': 'xml', '.xaml': 'xml',
-    '.cpp': 'cpp', '.c': 'c', '.h': 'cpp', '.java': 'java', '.sql': 'sql',
-    '.sh': 'bash', '.bat': 'batch', '.txt': 'text', '.md': 'markdown',
-    '.vue': 'javascript', '.jsx': 'javascript', '.tsx': 'typescript',
-    '.go': 'go', '.rs': 'rust', '.php': 'php', '.rb': 'ruby'
+    ".cs": "csharp",
+    ".py": "python",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".html": "html",
+    ".css": "css",
+    ".json": "json",
+    ".xml": "xml",
+    ".xaml": "xml",
+    ".cpp": "cpp",
+    ".c": "c",
+    ".h": "cpp",
+    ".java": "java",
+    ".sql": "sql",
+    ".sh": "bash",
+    ".bat": "batch",
+    ".txt": "text",
+    ".md": "markdown",
+    ".vue": "javascript",
+    ".jsx": "javascript",
+    ".tsx": "typescript",
+    ".go": "go",
+    ".rs": "rust",
+    ".php": "php",
+    ".rb": "ruby",
 }
+
 
 class ConfigManager:
     def __init__(self):
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             base_dir = os.path.dirname(sys.executable)
         else:
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -33,13 +53,7 @@ class ConfigManager:
             "line_numbers": False,
             "use_sharp_indent": False,
             "ollama_model": "None",
-            "ollama_options": {
-                "num_ctx": 24000,
-                "num_predict": 12000,
-                "temperature": 0.5,
-                "top_p": 0.95,
-                "top_k": 100
-            },
+            "ollama_options": {"num_ctx": 24000, "num_predict": 12000, "temperature": 0.5, "top_p": 0.95, "top_k": 100},
             "opt_chunk_size": 7000,
             "opt_chunk_unit": "tokens",
             "opt_default_model": "None",
@@ -49,13 +63,7 @@ class ConfigManager:
             "font_size": 10,
             "tree_row_height": 28,
             "checkbox_size": 14,
-            "tabs_visibility": {
-                "generator": True,
-                "info": True,
-                "editor": True,
-                "plan": True,
-                "quality": True
-            },
+            "tabs_visibility": {"generator": True, "info": True, "editor": True, "plan": True, "quality": True},
             "recent_projects": [],
             "git_enabled": False,
             "git_branch_mode": "new",
@@ -70,13 +78,13 @@ class ConfigManager:
             "opt_greedy_llm_weight": 0.6,
             "opt_greedy_pr_weight": 0.3,
             "opt_greedy_cc_weight": 0.1,
-            "opt_token_bytes_per_token": 4
+            "opt_token_bytes_per_token": 4,
         }
 
     def load(self):
         if os.path.exists(self.config_file):
             try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
+                with open(self.config_file, encoding="utf-8") as f:
                     return {**self.default_config, **json.load(f)}
             except Exception:
                 return self.default_config
@@ -85,7 +93,7 @@ class ConfigManager:
     def save(self, data):
         try:
             json_str = json.dumps(data, indent=4, ensure_ascii=False)
-            with open(self.config_file, 'w', encoding='utf-8') as f:
+            with open(self.config_file, "w", encoding="utf-8") as f:
                 f.write(json_str)
         except Exception as e:
             print(f"Не удалось сохранить настройки: {e}")

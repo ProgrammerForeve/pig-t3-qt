@@ -2,3 +2,4 @@ app_config.json
 .venv
 .pig
 *.pyc
+project_context.txt
