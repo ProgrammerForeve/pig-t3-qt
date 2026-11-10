@@ -45,24 +45,33 @@ def run_gui_qt() -> int:
 
     # Сплеш-скрин (если есть logo.png)
     splash = None
-    logo_path = _resource_path("logo.png")
-    if logo_path:
-        pixmap = QPixmap(logo_path)
-        if not pixmap.isNull():
-            screen = app.primaryScreen().size()
-            target_h = screen.height() // 5
-            if pixmap.height() > target_h:
-                pixmap = pixmap.scaledToHeight(target_h, Qt.TransformationMode.SmoothTransformation)
-            splash = QSplashScreen(pixmap)
-            splash.show()
-            app.processEvents()
+    # PIG_NO_SPLASH=1 — диагностический режим без splash (на случай,
+    # если краш происходит при splash.finish + deleteLater).
+    if not os.environ.get("PIG_NO_SPLASH"):
+        logo_path = _resource_path("logo.png")
+        if logo_path:
+            pixmap = QPixmap(logo_path)
+            if not pixmap.isNull():
+                screen = app.primaryScreen().size()
+                target_h = screen.height() // 5
+                if pixmap.height() > target_h:
+                    pixmap = pixmap.scaledToHeight(target_h, Qt.TransformationMode.SmoothTransformation)
+                splash = QSplashScreen(pixmap)
+                splash.show()
+                app.processEvents()
 
     window = MainWindow(config, settings)
+    # Держим splash живым как атрибут window, чтобы GC не освободил
+    # C++ объект раньше, чем event loop обработает deleteLater.
+    window._splash = splash
 
-    def _show() -> None:
+    def _show():
         window.show()
         if splash is not None:
-            splash.finish(window)
+            try:
+                splash.finish(window)
+            except Exception as e:
+                print(f"splash.finish error: {e}")
 
     if splash is not None:
         QTimer.singleShot(1000, _show)

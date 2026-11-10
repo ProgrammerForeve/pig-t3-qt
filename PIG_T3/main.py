@@ -27,6 +27,17 @@ def _protect_std_streams():
 
 
 _protect_std_streams()
+
+# faulthandler: печатает Python-стек при SIGSEGV/SIGABRT/SIGFPE.
+# Помогает локализовать C++-краши (`free(): invalid size` и т.п.),
+# которые не ловятся обычным try/except.
+import faulthandler as _faulthandler  # noqa: E402
+
+try:
+    _crash_log = open("/tmp/pig_crash.log", "a")  # noqa: SIM115
+    _faulthandler.enable(file=_crash_log, all_threads=True)
+except Exception:
+    _faulthandler.enable(all_threads=True)
 # Включаем поддержку высокого разрешения (DPI Awareness) для четкости на 4K
 if sys.platform == "win32":
     try:

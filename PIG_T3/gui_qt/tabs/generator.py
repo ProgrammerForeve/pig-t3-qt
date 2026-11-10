@@ -1,4 +1,4 @@
-"""Вкладка «Генератор» — каркас (T-101..T-103) + дерево проекта (T-105).
+"""Вкладка «Генератор» — каркас (T-101..T-103) + дерево (T-105..T-106).
 
 Публичный интерфейс:
 - ``GeneratorTab(settings: dict)``
@@ -6,6 +6,8 @@
 - ``commit_recent_projects()`` — recent_projects + completer refresh
 - ``refresh_tree()`` — сканировать и пересобрать дерево
 - ``set_tree_data(files)`` — пересобрать дерево из явного списка (тесты)
+- ``capture_tree_state() -> dict``
+- ``restore_tree_state_from_settings()``
 - ``settings_changed`` (Signal)
 """
 
@@ -14,17 +16,17 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QStringListModel, Qt, QTimer, Signal
+from PySide6.QtCore import QModelIndex, QStringListModel, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QCompleter,
     QFileDialog,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -46,6 +48,7 @@ class GeneratorTab(QWidget):
         super().__init__()
         self.settings = settings
         self.analyzer = ProjectAnalyzer()
+        self._last_root = None
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
@@ -56,6 +59,21 @@ class GeneratorTab(QWidget):
         self._populate(settings)
         self._connect_signals()
         self.refresh_tree()
+
+        # Restore unchecked synchronously — set_unchecked_paths only
+        # emits dataChanged, no persistent indices, safe right after
+        # reset_data.
+        unchecked = self.settings.get("ui_tree_unchecked", [])
+        if unchecked:
+            self.tree_model.set_unchecked_paths(unchecked)
+
+        # Restore expanded DEFERRED — setExpanded creates persistent
+        # indices in QTreeView. Calling it synchronously right after
+        # endResetModel can corrupt view internals on some Qt versions
+        # (free(): invalid size). One event-loop tick is enough.
+        expanded = self.settings.get("ui_tree_expanded", [])
+        if expanded:
+            QTimer.singleShot(0, lambda e=list(expanded): self._restore_expanded_paths(e))
 
     # ---------- UI ----------
 
@@ -101,9 +119,19 @@ class GeneratorTab(QWidget):
         self.ignore_edit = QLineEdit()
         layout.addWidget(self.ignore_edit)
 
-        # --- Опции генерации (T-102) ---
-        options_group = QGroupBox("Опции генерации")
-        options_layout = QVBoxLayout(options_group)
+        # --- Опции генерации (сворачиваемые, T-106b) ---
+        self.options_toggle = QToolButton()
+        self.options_toggle.setText("Опции генерации")
+        self.options_toggle.setCheckable(True)
+        self.options_toggle.setChecked(True)
+        self.options_toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self.options_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.options_toggle.toggled.connect(self._on_options_toggled)
+        layout.addWidget(self.options_toggle)
+
+        self.options_widget = QWidget()
+        options_layout = QVBoxLayout(self.options_widget)
+        options_layout.setContentsMargins(20, 0, 0, 0)
 
         self.cb_include_empty = QCheckBox("Включить в отчёт пустые папки")
         self.cb_add_edit_prompt = QCheckBox("Добавить инструкцию для AI (JSON Format)")
@@ -113,7 +141,7 @@ class GeneratorTab(QWidget):
 
         for cb in self._checkboxes():
             options_layout.addWidget(cb)
-        layout.addWidget(options_group)
+        layout.addWidget(self.options_widget)
 
         # --- Дерево проекта (T-105) ---
         tree_header = QHBoxLayout()
@@ -175,6 +203,10 @@ class GeneratorTab(QWidget):
     def _on_checkbox_toggled(self, _checked: bool) -> None:
         self.settings_changed.emit()
 
+    def _on_options_toggled(self, checked: bool) -> None:
+        self.options_widget.setVisible(checked)
+        self.options_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+
     # ---------- Public ----------
 
     def collect_settings(self) -> dict:
@@ -201,20 +233,47 @@ class GeneratorTab(QWidget):
         self.settings["recent_projects"] = recent
         self._completer_model.setStringList(recent)
 
+    def capture_tree_state(self) -> dict:
+        """Снимок ui_tree_expanded / ui_tree_unchecked для сохранения."""
+        try:
+            return {
+                "ui_tree_expanded": self._capture_expanded_paths(),
+                "ui_tree_unchecked": self.tree_model.unchecked_paths(),
+            }
+        except Exception as e:
+            print(f"Error capturing tree state: {e}")
+            return {"ui_tree_expanded": [], "ui_tree_unchecked": []}
+
     def refresh_tree(self) -> None:
-        """Сканирует текущий root_folder и пересобирает дерево."""
+        """Сканирует текущий root_folder и пересобирает дерево.
+
+        Если root не изменился — сохраняет состояние чекбоксов и
+        раскрытых папок. Если изменился — сбрасывает (новый проект).
+        """
         root = self.path_edit.text().strip()
+        root_changed = root != self._last_root
+        self._last_root = root
+
         if not root or not os.path.isdir(root):
             self.tree_model.reset_data([], root or os.getcwd())
             return
 
+        if not root_changed and self.tree_model.root_path:
+            try:
+                saved_unchecked = self.tree_model.unchecked_paths()
+                saved_expanded = self._capture_expanded_paths()
+            except Exception as e:
+                print(f"Error capturing state before refresh: {e}")
+                saved_unchecked = []
+                saved_expanded = []
+        else:
+            saved_unchecked = []
+            saved_expanded = []
+
         extensions_clean = ", ".join(x.strip() for x in self.ext_edit.text().split(",") if x.strip())
         ignore_clean = ", ".join(x.strip() for x in self.ignore_edit.text().split(",") if x.strip())
-        # ProjectAnalyzer.scan_directory splits config['ignore_list'] by
-        # comma and treats every entry as a substring filter. An empty
-        # result would become [''] after split, and '' in <any path> is
-        # True — everything gets filtered out. Use \x00 (impossible in a
-        # filesystem path) as sentinel so nothing matches.
+        # Sentinel: пустой ignore_list станет [''] после split в
+        # analyzer, а '' in <any path> истинно → отфильтрует всё.
         if not ignore_clean:
             ignore_clean = "\x00"
 
@@ -234,9 +293,52 @@ class GeneratorTab(QWidget):
             files = []
         self.tree_model.reset_data(files, root)
 
+        if saved_unchecked:
+            self.tree_model.set_unchecked_paths(saved_unchecked)
+        if saved_expanded:
+            # Defer setExpanded — same reason as in _deferred_restore.
+            QTimer.singleShot(0, lambda e=list(saved_expanded): self._restore_expanded_paths(e))
+
     def set_tree_data(self, files: list[tuple[str, str]]) -> None:
         """Пересобрать дерево из явного списка (для тестов/внешних вызовов)."""
         self.tree_model.reset_data(files, self.path_edit.text())
+
+    # ---------- Tree state helpers ----------
+
+    def _capture_expanded_paths(self) -> list[str]:
+        """Относительные пути всех раскрытых папок.
+
+        Обёрнуто в try/except: на некоторых Qt-сборках внутренние
+        persistent indices могут быть временно невалидны (особенно
+        сразу после reset_data). Безопаснее вернуть частичный
+        результат, чем уронить приложение.
+        """
+        result: list[str] = []
+
+        def walk(index: QModelIndex) -> None:
+            if not index.isValid():
+                return
+            try:
+                node = index.internalPointer()
+                if node is not None and node.is_dir and self.tree_view.isExpanded(index):
+                    result.append(self.tree_model.relative_path(index))
+                for i in range(self.tree_model.rowCount(index)):
+                    walk(self.tree_model.index(i, 0, index))
+            except Exception as e:
+                print(f"walk error at expanded capture: {e}")
+
+        try:
+            for i in range(self.tree_model.rowCount(QModelIndex())):
+                walk(self.tree_model.index(i, 0, QModelIndex()))
+        except Exception as e:
+            print(f"Error capturing expanded paths: {e}")
+        return result
+
+    def _restore_expanded_paths(self, paths: list[str]) -> None:
+        for rel in paths:
+            idx = self.tree_model.find_index(rel)
+            if idx.isValid():
+                self.tree_view.setExpanded(idx, True)
 
     # ---------- Handlers ----------
 

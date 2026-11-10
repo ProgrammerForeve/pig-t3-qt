@@ -308,3 +308,210 @@ def test_tree_ignores_empty_ignore_entries(qtbot, tmp_path):
     from PySide6.QtCore import QModelIndex
 
     assert tab.tree_model.rowCount(QModelIndex()) == 1
+
+
+# ---------- T-106: персистентность дерева ----------
+
+
+def test_capture_tree_state_returns_dict(qtbot, tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    state = tab.capture_tree_state()
+    assert "ui_tree_expanded" in state
+    assert "ui_tree_unchecked" in state
+    assert isinstance(state["ui_tree_expanded"], list)
+    assert isinstance(state["ui_tree_unchecked"], list)
+
+
+def test_unchecked_files_saved_to_state(qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+
+    (tmp_path / "a.py").write_text("x")
+    (tmp_path / "b.py").write_text("y")
+    settings = {"root_folder": str(tmp_path), "extensions": ".py", "ignore_list": ""}
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    idx = tab.tree_model.find_index("a.py")
+    tab.tree_model.setData(idx, Qt.CheckState.Unchecked.value, Qt.ItemDataRole.CheckStateRole)
+    state = tab.capture_tree_state()
+    assert "a.py" in state["ui_tree_unchecked"]
+
+
+def test_restore_tree_state_from_settings(qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+
+    (tmp_path / "a.py").write_text("x")
+    (tmp_path / "b.py").write_text("y")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "ui_tree_unchecked": ["a.py"],
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    idx = tab.tree_model.find_index("a.py")
+    assert tab.tree_model.data(idx, Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Unchecked
+    idx_b = tab.tree_model.find_index("b.py")
+    assert tab.tree_model.data(idx_b, Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+
+
+def test_refresh_preserves_uncheck_state(qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+
+    (tmp_path / "a.py").write_text("x")
+    (tmp_path / "b.py").write_text("y")
+    settings = {"root_folder": str(tmp_path), "extensions": ".py", "ignore_list": ""}
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    idx = tab.tree_model.find_index("a.py")
+    tab.tree_model.setData(idx, Qt.CheckState.Unchecked.value, Qt.ItemDataRole.CheckStateRole)
+    tab.refresh_tree()
+    idx = tab.tree_model.find_index("a.py")
+    assert tab.tree_model.data(idx, Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Unchecked
+
+
+def test_refresh_resets_on_root_change(qtbot, tmp_path):
+    from PySide6.QtCore import QModelIndex, Qt
+
+    d1 = tmp_path / "d1"
+    d2 = tmp_path / "d2"
+    d1.mkdir()
+    d2.mkdir()
+    (d1 / "a.py").write_text("x")
+    (d2 / "b.py").write_text("y")
+    settings = {"root_folder": str(d1), "extensions": ".py", "ignore_list": ""}
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    idx = tab.tree_model.find_index("a.py")
+    tab.tree_model.setData(idx, Qt.CheckState.Unchecked.value, Qt.ItemDataRole.CheckStateRole)
+    tab.path_edit.setText(str(d2))
+    tab.refresh_tree()
+    assert tab.tree_model.rowCount(QModelIndex()) == 1
+    idx = tab.tree_model.find_index("b.py")
+    assert tab.tree_model.data(idx, Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+
+
+def test_capture_expanded_paths_returns_only_expanded_dirs(qtbot, tmp_path):
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "a.py").write_text("x")
+    settings = {"root_folder": str(tmp_path), "extensions": ".py", "ignore_list": ""}
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    idx = tab.tree_model.find_index("sub")
+    tab.tree_view.setExpanded(idx, True)
+    state = tab.capture_tree_state()
+    assert "sub" in state["ui_tree_expanded"]
+    assert "sub/a.py" not in state["ui_tree_expanded"]
+
+
+def test_main_window_close_saves_tree_state(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+
+    from PIG_T3.config import ConfigManager
+    from PIG_T3.gui_qt.main_window import MainWindow
+
+    cfg_path = tmp_path / "app_config.json"
+    config = ConfigManager()
+    monkeypatch.setattr(config, "config_file", str(cfg_path))
+
+    (tmp_path / "a.py").write_text("x")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "recent_projects": [],
+    }
+    window = MainWindow(config, settings)
+    qtbot.addWidget(window)
+
+    generator = window._tab_widgets["generator"]
+    idx = generator.tree_model.find_index("a.py")
+    generator.tree_model.setData(idx, Qt.CheckState.Unchecked.value, Qt.ItemDataRole.CheckStateRole)
+
+    window.close()
+
+    import json
+
+    saved = json.loads(cfg_path.read_text())
+    assert "a.py" in saved["ui_tree_unchecked"]
+
+
+# ---------- T-106a: отложенное восстановление expanded ----------
+
+
+def test_restore_expanded_deferred(qtbot, tmp_path):
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "a.py").write_text("x")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "ui_tree_expanded": ["sub"],
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    idx = tab.tree_model.find_index("sub")
+    qtbot.waitUntil(lambda: tab.tree_view.isExpanded(idx), timeout=1000)
+
+
+def test_refresh_preserves_expanded_deferred(qtbot, tmp_path):
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "a.py").write_text("x")
+    settings = {"root_folder": str(tmp_path), "extensions": ".py", "ignore_list": ""}
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    idx = tab.tree_model.find_index("sub")
+    tab.tree_view.setExpanded(idx, True)
+
+    tab.refresh_tree()
+
+    idx = tab.tree_model.find_index("sub")
+    qtbot.waitUntil(lambda: tab.tree_view.isExpanded(idx), timeout=1000)
+
+
+# ---------- T-106b: сворачиваемые опции ----------
+
+
+def test_options_toggle_exists(settings, qtbot):
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    assert hasattr(tab, "options_toggle")
+    assert hasattr(tab, "options_widget")
+
+
+def test_options_toggle_hides_widget(settings, qtbot):
+    """Toggle скрывает/показывает options_widget по клику (не авто)."""
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    # Manual collapse — should always be possible
+    tab.options_toggle.setChecked(False)
+    assert tab.options_widget.isVisibleTo(tab) is False
+    tab.options_toggle.setChecked(True)
+    assert tab.options_widget.isVisibleTo(tab) is True
+
+
+# ---------- T-106c: окно подстраивается под экран ----------
+
+
+def test_main_window_has_small_minimum_size(qtbot, tmp_path, monkeypatch):
+    from PIG_T3.config import ConfigManager
+    from PIG_T3.gui_qt.main_window import MainWindow
+
+    cfg_path = tmp_path / "app_config.json"
+    config = ConfigManager()
+    monkeypatch.setattr(config, "config_file", str(cfg_path))
+
+    window = MainWindow(config, {"recent_projects": []})
+    qtbot.addWidget(window)
+    assert window.minimumWidth() <= 800
+    assert window.minimumHeight() <= 500

@@ -46,8 +46,23 @@ class MainWindow(QMainWindow):
 
     def _setup_window(self) -> None:
         self.setWindowTitle("AI Context Generator & Patcher (PySide6)")
-        self.resize(1200, 950)
-        self.setMinimumSize(850, 680)
+
+        from PySide6.QtWidgets import QApplication
+
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            w = min(1200, max(600, avail.width() - 80))
+            h = min(950, max(400, avail.height() - 80))
+            self.resize(w, h)
+            self.move(
+                avail.left() + (avail.width() - w) // 2,
+                avail.top() + (avail.height() - h) // 2,
+            )
+        else:
+            self.resize(1200, 950)
+
+        self.setMinimumSize(600, 400)
 
     def _setup_tabs(self) -> None:
         self.tabs = QTabWidget()
@@ -115,8 +130,11 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         try:
             generator = self._tab_widgets.get("generator")
-            if generator is not None and hasattr(generator, "commit_recent_projects"):
-                generator.commit_recent_projects()
+            if generator is not None:
+                if hasattr(generator, "commit_recent_projects"):
+                    generator.commit_recent_projects()
+                if hasattr(generator, "capture_tree_state"):
+                    self.settings.update(generator.capture_tree_state())
             save_migrated(self.config, self.settings)
         except Exception as e:
             print(f"Ошибка сохранения настроек при выходе: {e}")

@@ -53,6 +53,15 @@ class ProjectTreeModel(QAbstractItemModel):
         super().__init__(parent)
         self.root_path = os.path.abspath(root_path)
         self._root = TreeNode(name="", path=self.root_path, is_dir=True)
+        # Keep-alive for all TreeNode objects ever exposed via
+        # createIndex(...). PySide6 does NOT increment refcount on
+        # internalPointer — it is a borrowed reference. If a TreeNode
+        # is GC'd while QTreeView still holds a persistent index into
+        # it, the next dereference is undefined behaviour (observed
+        # as `free(): invalid size`). Keeping every node alive for
+        # the lifetime of this model prevents the crash at the cost
+        # of a small, bounded memory leak.
+        self._all_nodes: list[TreeNode] = [self._root]
         self._build_tree(files)
         self._recompute_all(self._root)
 
@@ -77,6 +86,7 @@ class ProjectTreeModel(QAbstractItemModel):
                     )
                     parent_node.children.append(node)
                     dirs_map[current_rel] = node
+                    self._all_nodes.append(node)
                 parent_node = dirs_map[current_rel]
 
             fname = parts[-1]
@@ -87,6 +97,7 @@ class ProjectTreeModel(QAbstractItemModel):
                 parent=parent_node,
             )
             parent_node.children.append(file_node)
+            self._all_nodes.append(file_node)
 
         self._sort_recursive(self._root)
 
@@ -247,6 +258,15 @@ class ProjectTreeModel(QAbstractItemModel):
 
     # ---------- Public helpers ----------
 
+    def relative_path(self, index: QModelIndex) -> str:
+        """Вернуть относительный путь для индекса ('' если невалиден)."""
+        if not index.isValid():
+            return ""
+        node = index.internalPointer()
+        if node is None:
+            return ""
+        return self._rel_path(node)
+
     def find_index(self, rel_path: str) -> QModelIndex:
         """Вернуть QModelIndex по относительному пути (или invalid, если нет)."""
         node = self._find_node(rel_path)
@@ -309,14 +329,19 @@ class ProjectTreeModel(QAbstractItemModel):
 
         Состояние чекбоксов сбрасывается в Checked (персистентность —
         задача T-106).
+
+        Все старые TreeNode остаются живыми в ``_all_nodes``, чтобы
+        QTreeView не держал dangling internalPointer во время reset.
         """
         self.beginResetModel()
         if root_path:
             self.root_path = os.path.abspath(root_path)
             self._root = TreeNode(name="", path=self.root_path, is_dir=True)
+            self._all_nodes.append(self._root)
             self._build_tree(files)
             self._recompute_all(self._root)
         else:
             self.root_path = ""
             self._root = TreeNode(name="", path="/", is_dir=True)
+            self._all_nodes.append(self._root)
         self.endResetModel()
