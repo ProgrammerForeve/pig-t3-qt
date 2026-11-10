@@ -21,7 +21,9 @@ repos:
     hooks:
       - id: pytest-fast
         name: pytest (fast)
-        entry: uv run pytest tests/ -q --timeout=30 -x
+        entry: >
+          uv run pytest tests/ -q --timeout=30 --timeout-method=thread -x
+          -p no:cacheprovider -p no:cov
         language: system
         pass_filenames: false
         always_run: true
