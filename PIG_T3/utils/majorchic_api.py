@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from playwright.sync_api import sync_playwright
 import os
@@ -109,7 +110,7 @@ class DeepSeekAPI(BaseWebAPI):
                 btn.click()
                 time.sleep(0.5)
         except Exception as e:
-            print(f"Не удалось переключить режим модели: {e}")
+            log.warning(f"Не удалось переключить режим модели: {e}")
     def _handle_cloudflare(self):
         """
         Попытка автоматического обхода проверки Cloudflare.
@@ -119,17 +120,17 @@ class DeepSeekAPI(BaseWebAPI):
         try:
             for frame in self.page.frames:
                 if "cloudflare" in frame.url or "turnstile" in frame.url:
-                    print("Обнаружен Cloudflare, пытаюсь пройти проверку...")
+                    log.debug("Обнаружен Cloudflare, пытаюсь пройти проверку...")
                     box = frame.locator("input[type='checkbox'], .cb-c, body")
                     if box.count() > 0:
                         box.first.click()
                         time.sleep(5)
         except Exception as e:
-            print(f"Ошибка при прохождении Cloudflare: {e}")
+            log.warning(f"Ошибка при прохождении Cloudflare: {e}")
 
 
     def new_chat(self, disable_expert=False):
-        print("Создание нового чата...")
+        log.debug("Создание нового чата...")
         try:
             new_btn = self.page.locator('div, a').filter(has_text="New chat").first
             if new_btn.is_visible():
@@ -165,9 +166,9 @@ class DeepSeekAPI(BaseWebAPI):
                     dt_btn.click(timeout=5000, force=True)
                     time.sleep(0.5)
             else:
-                print("Кнопка DeepThink не найдена. Продолжаю без неё.")
+                log.debug("Кнопка DeepThink не найдена. Продолжаю без неё.")
         except Exception as e:
-            print(f"Ошибка при переключении DeepThink (игнорирую): {e}")
+            log.warning(f"Ошибка при переключении DeepThink (игнорирую): {e}")
 
         if files:
             try:
@@ -188,7 +189,7 @@ class DeepSeekAPI(BaseWebAPI):
                         pass
                 time.sleep(2)
             except Exception as e:
-                print(f"Не удалось прикрепить файлы: {e}")
+                log.warning(f"Не удалось прикрепить файлы: {e}")
 
         md_selector = ".ds-markdown, .markdown-body, div[class*='markdown'], div[class*='prose']"
 
@@ -231,11 +232,11 @@ class DeepSeekAPI(BaseWebAPI):
 
         if not send_success:
             if not _is_retry:
-                print("Не удалось отправить запрос (поле не очистилось). Создаю новый чат...")
+                log.warning("Не удалось отправить запрос (поле не очистилось). Создаю новый чат...")
                 self.new_chat()
                 return self.ask(prompt, files=files, deep_think=deep_think, _is_retry=True)
             elif self.expert_mode and not getattr(self, '_expert_disabled_temp', False):
-                print("Снова не удалось отправить. Отключаю Expert mode и создаю новый чат...")
+                log.warning("Снова не удалось отправить. Отключаю Expert mode и создаю новый чат...")
                 self.new_chat(disable_expert=True)
                 self._expert_disabled_temp = True
                 res = self.ask(prompt, files=files, deep_think=deep_think, _is_retry=True)
@@ -317,7 +318,7 @@ class DeepSeekAPI(BaseWebAPI):
                 if clicked:
                     time.sleep(0.5) # Ждем полсекунды, чтобы текст точно попал в буфер
                     clip_val = self.page.evaluate("navigator.clipboard.readText().catch(() => '')")
-                    print("Ответ промта:",clip_val,"Конец ответа промта")
+                    log.debug(" ".join(map(str, ("Ответ промта:",clip_val,"Конец ответа промта",))))
                     if clip_val:
                         return clip_val
 
@@ -336,11 +337,11 @@ class DeepSeekAPI(BaseWebAPI):
 
         if timeout_occurred:
             if not _is_retry:
-                print("Превышено время ожидания (10 минут). Создаем новый чат...")
+                log.debug("Превышено время ожидания (10 минут). Создаем новый чат...")
                 self.new_chat()
                 return self.ask(prompt, files=files, deep_think=deep_think, _is_retry=True)
             elif self.expert_mode and not getattr(self, '_expert_disabled_temp', False):
-                print("Снова таймаут. Отключаю Expert mode и создаю новый чат...")
+                log.debug("Снова таймаут. Отключаю Expert mode и создаю новый чат...")
                 self.new_chat(disable_expert=True)
                 self._expert_disabled_temp = True
                 res = self.ask(prompt, files=files, deep_think=deep_think, _is_retry=True)
@@ -377,7 +378,7 @@ class GeminiAPI(BaseWebAPI):
 
 
     def new_chat(self):
-        print("Создание нового чата Gemini...")
+        log.debug("Создание нового чата Gemini...")
         try:
             self.page.goto(self.url, wait_until="domcontentloaded")
             self.wait_for_ready()
@@ -405,7 +406,7 @@ class GeminiAPI(BaseWebAPI):
                         pass
                 time.sleep(1)
             except Exception as e:
-                print(f"Не удалось прикрепить файлы: {e}")
+                log.warning(f"Не удалось прикрепить файлы: {e}")
 
         try:
             initial_thumb_count = self.page.locator('button[aria-label="Good response"], .turn-footer button, button:has(.material-symbols-outlined:has-text("thumb_up"))').count()
@@ -441,7 +442,7 @@ class GeminiAPI(BaseWebAPI):
 
         if not completed:
             if not _is_retry:
-                print("Превышено время ожидания (10 минут). Создаем новый чат...")
+                log.debug("Превышено время ожидания (10 минут). Создаем новый чат...")
                 self.new_chat()
                 return self.ask(prompt, files=files, _is_retry=True, **kwargs)
             else:
@@ -493,6 +494,9 @@ class GeminiAPI(BaseWebAPI):
 import sys
 import argparse
 import os
+
+log = logging.getLogger("pig_t3.utils.majorchic_api")
+
 
 
 class MajorchicAPIAdapter:
@@ -546,11 +550,11 @@ class MajorchicAPIAdapter:
         if self.backend == "deepseek":
             dt = payload.get("deep_think", self.deep_think) if isinstance(payload, dict) else self.deep_think
             ot = self.ai.ask(prompt, deep_think=dt, cancel_event=cancel_event)
-            print("Ответ от мажёрчик API:", ot, "Конец ответа мажёрчик API")
+            log.debug(" ".join(map(str, ("Ответ от мажёрчик API:", ot, "Конец ответа мажёрчик API",))))
             return ot
         else:
             ot = self.ai.ask(prompt, cancel_event=cancel_event)
-            print("Ответ от мажёрчик API:", ot, "Конец ответа мажёрчик API")
+            log.debug(" ".join(map(str, ("Ответ от мажёрчик API:", ot, "Конец ответа мажёрчик API",))))
             return ot
 
     def close(self):
@@ -571,51 +575,51 @@ def main():
     # Определение модели
     model_choice = args.model
     if not model_choice:
-        print("Доступные модели:")
-        print("1. Gemini (Google AI Studio)")
-        print("2. DeepSeek (chat.deepseek.com)")
+        log.debug("Доступные модели:")
+        log.debug("1. Gemini (Google AI Studio)")
+        log.debug("2. DeepSeek (chat.deepseek.com)")
         choice = input("\nВыберите модель (1/2): ").strip()
         if choice == "1":
             model_choice = "gemini"
         elif choice == "2":
             model_choice = "deepseek"
         else:
-            print("Неверный выбор.")
+            log.debug("Неверный выбор.")
             sys.exit(1)
 
     # Инициализация
     ai = None
     try:
         if model_choice == "gemini":
-            print(f"\nИнициализация Gemini (профиль: {args.profile})...")
+            log.debug(f"\nИнициализация Gemini (профиль: {args.profile})...")
             ai = GeminiAPI(profile_name=args.profile, headless=args.headless)
         else:
-            print(f"\nИнициализация DeepSeek (профиль: {args.profile})...")
+            log.debug(f"\nИнициализация DeepSeek (профиль: {args.profile})...")
             ai = DeepSeekAPI(profile_name=args.profile, headless=args.headless, expert_mode=not args.no_expert, deep_think=not args.no_deepthink)
 
-        print("Браузер готов. Вводите промпты (для выхода введите 'exit' или 'quit').")
-        print("-" * 50)
+        log.debug("Браузер готов. Вводите промпты (для выхода введите 'exit' или 'quit').")
+        log.debug("-" * 50)
 
         current_files = [os.path.abspath(f) for f in args.files] if args.files else None
 
         while True:
             prompt = input("\nПромпт: ").strip()
             if prompt.lower() in ("exit", "quit"):
-                print("Завершение работы.")
+                log.debug("Завершение работы.")
                 break
             if not prompt:
-                print("Промпт не может быть пустым.")
+                log.debug("Промпт не может быть пустым.")
                 continue
 
-            print("\n[Ответ]:")
+            log.debug("\n[Ответ]:")
             response = ai.ask(prompt, files=current_files)
-            print(response)
+            log.debug(response)
             current_files = None  # Сбрасываем файлы после первой отправки
 
     except KeyboardInterrupt:
-        print("\n\nПрерывание пользователя.")
+        log.debug("\n\nПрерывание пользователя.")
     except Exception as e:
-        print(f"\nПроизошла ошибка: {e}")
+        log.warning(f"\nПроизошла ошибка: {e}")
     finally:
         if ai:
             ai.close()

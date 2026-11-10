@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import subprocess
 from datetime import datetime
@@ -49,6 +50,8 @@ from ..workers.plan_step_worker import PlanStepWorker, apply_mark_to_step
 
 _SAVE_DEBOUNCE_MS = 500
 _PLAN_HISTORY_LIMIT = 10
+
+log = logging.getLogger("pig_t3.plan_tab")
 
 
 def _show_warning(parent, title: str, text: str) -> None:
@@ -250,7 +253,7 @@ class PlanTab(QWidget):
             if not isinstance(data, list):
                 data = []
         except Exception as e:
-            print(f"load_plan error: {e}")
+            log.warning("load_plan error: %s", e)
             data = []
         self.plan_data = data
         issues = validate_plan(self.plan_data)
@@ -272,7 +275,7 @@ class PlanTab(QWidget):
                 json.dump(self.plan_data, f, indent=4, ensure_ascii=False)
             self.plan_changed.emit()
         except Exception as e:
-            print(f"save_plan error: {e}")
+            log.warning("save_plan error: %s", e)
 
     def stop_workers(self) -> None:
         self._save_timer.stop()
@@ -779,7 +782,7 @@ class PlanTab(QWidget):
                 self._git_repo_path = result.stdout.strip()
                 return True
         except Exception as e:
-            print(f"git rev-parse failed: {e}")
+            log.warning("git rev-parse failed: %s", e)
         self._git_available = False
         self._git_repo_path = None
         return False
@@ -821,7 +824,7 @@ class PlanTab(QWidget):
                 self._git_push()
             return True
         except Exception as e:
-            print(f"Git auto-commit failed: {e}")
+            log.warning("Git auto-commit failed: %s", e)
             return False
 
     def _git_push(self) -> bool:
@@ -835,7 +838,7 @@ class PlanTab(QWidget):
             )
             return True
         except Exception as e:
-            print(f"Git push failed: {e}")
+            log.warning("Git push failed: %s", e)
             return False
 
     @staticmethod

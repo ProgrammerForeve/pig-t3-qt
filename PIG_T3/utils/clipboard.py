@@ -1,6 +1,10 @@
+import logging
 import os
 import ctypes
 from ctypes import wintypes
+
+log = logging.getLogger("pig_t3.utils.clipboard")
+
 
 
 def copy_file_to_clipboard_windows(filepath):
@@ -68,5 +72,5 @@ def copy_file_to_clipboard_windows(filepath):
         user32.CloseClipboard()
         return True
     except Exception as e:
-        print(f"Ошибка копирования файла в буфер: {e}")
+        log.warning(f"Ошибка копирования файла в буфер: {e}")
         return False

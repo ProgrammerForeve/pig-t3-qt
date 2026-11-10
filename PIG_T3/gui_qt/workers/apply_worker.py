@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import uuid
@@ -15,6 +16,8 @@ import uuid
 from PySide6.QtCore import QObject, Signal, Slot
 
 from ...core.patcher import apply_llm_changes, clean_json_text
+
+log = logging.getLogger("pig_t3.apply_worker")
 
 
 def _filter_paths(paths: list[str]) -> list[str]:

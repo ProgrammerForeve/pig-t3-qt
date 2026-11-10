@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
 import threading
 from typing import Any
@@ -41,6 +42,8 @@ Example: {{"path/to/file1.py": 100, "path/to/file2.py": 30}}
 
 FILES:
 {context}"""
+
+log = logging.getLogger("pig_t3.llm_wrappers")
 
 
 def _build_prompt(task: str, meta_list: list[dict]) -> str:
@@ -174,7 +177,7 @@ class _BomjBridge(QObject):
         try:
             self._result = api.send(payload, parent=self._parent_widget) or ""
         except Exception as e:
-            print(f"BomjAPI error: {e}")
+            log.warning("BomjAPI error: %s", e)
             self._result = ""
         finally:
             if self._event is not None:

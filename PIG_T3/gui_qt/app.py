@@ -1,5 +1,6 @@
 """QApplication bootstrap + сплеш-скрин."""
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -12,6 +13,8 @@ from ..config import ConfigManager
 from .config_compat import load_and_migrate
 from .main_window import MainWindow
 from .theme import apply_theme
+
+log = logging.getLogger("pig_t3.gui_qt.app")
 
 
 def _resource_path(name: str) -> str | None:
@@ -71,7 +74,7 @@ def run_gui_qt() -> int:
             try:
                 splash.finish(window)
             except Exception as e:
-                print(f"splash.finish error: {e}")
+                log.warning(f"splash.finish error: {e}")
 
     if splash is not None:
         QTimer.singleShot(1000, _show)

@@ -90,6 +90,7 @@ select = [
     "SIM",  # flake8-simplify (упрощение кода)
     "S",    # flake8-bandit (безопасность)
     "RUF",  # специфичные для Ruff
+    "T20",  # flake8-print (T201 = print found)
 ]
 
 ignore = [
@@ -109,6 +110,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "F403"]
 "tests/*" = ["S101", "E402"]
+# tests могут печатать для отладки — T201 только для PIG_T3
+"tests/**/*.py" = ["T201"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["PIG_T3"]

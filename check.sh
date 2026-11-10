@@ -6,6 +6,9 @@ TARGETS="PIG_T3/gui_qt PIG_T3/config.py tests"
 uv run ruff check $TARGETS --fix --unsafe-fixes
 uv run ruff format $TARGETS
 
+# Запрет print во всём пакете (только T20, отдельно от style-scope)
+uv run ruff check PIG_T3 --select T20 --no-fix
+
 if [ "${1:-}" = "--cov" ]; then
     echo ""
     echo "==> pytest + coverage"

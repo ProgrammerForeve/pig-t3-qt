@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 
 from PySide6.QtCore import QThread, Signal
@@ -38,6 +39,8 @@ from ..workers.ollama_models_worker import (
 )
 
 _HISTORY_LIMIT = 10
+
+log = logging.getLogger("pig_t3.editor")
 
 
 def _show_info(parent, title: str, text: str) -> None:

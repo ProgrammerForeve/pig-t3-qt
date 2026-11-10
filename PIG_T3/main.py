@@ -64,8 +64,13 @@ def _get_version() -> str:
 
 def main():
     if "--version" in sys.argv or "-V" in sys.argv:
-        print(f"PIG-T3 {_get_version()}")
+        print(f"PIG-T3 {_get_version()}")  # noqa: T201 — CLI output, не логирование
         return
+
+    from .logging_config import setup_logging
+
+    setup_logging(verbose=("--verbose" in sys.argv or "-v" in sys.argv))
+
     from .gui_qt.app import run_gui_qt
 
     sys.exit(run_gui_qt())

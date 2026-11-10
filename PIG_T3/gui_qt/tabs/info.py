@@ -7,6 +7,8 @@ QSplitter: слева QListWidget с разделами, справа QTextBrows
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QListWidget,
@@ -16,6 +18,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+log = logging.getLogger("pig_t3.gui_qt.tabs.info")
 
 _SECTIONS = [
     ("basic", "🔰 БАЗОВАЯ ИНФО"),
@@ -149,7 +153,7 @@ class InfoTab(QWidget):
        {"type": "replace_lines", "start": 10, "end": 12,
         "content": "    new_code()\\n    fixed_line()"},
        {"type": "insert_after_line", "line": 15,
-        "content": "    print('Debug info')"},
+        "content": "    log.debug('Debug info')"},
        {"type": "replace_text", "find": "old", "replace": "new"}
     ]
   },

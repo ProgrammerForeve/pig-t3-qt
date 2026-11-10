@@ -1,9 +1,13 @@
+import logging
 import json
 import sys
 import re
 import sys
 import requests
 from typing import Optional, Union, List
+
+log = logging.getLogger("pig_t3.core.ollama_client")
+
 
 
 def get_installed_models() -> List[str]:
@@ -41,7 +45,7 @@ Do NOT DELETE/CHANGE/ADD any INFORMATION or FIELDS!
 {malformed_text}'''
 
         if self.debug_prompt:
-            print("Prompt:\n-----------------------------------------------------------\n" + prompt + "\n-----------------------------------------------------------\n")
+            log.debug("Prompt:\n-----------------------------------------------------------\n" + prompt + "\n-----------------------------------------------------------\n")
 
         url = "http://localhost:11434/api/chat"
 
@@ -80,7 +84,7 @@ Do NOT DELETE/CHANGE/ADD any INFORMATION or FIELDS!
                         collected_thinking.append(val_thinking)
                         if self.debug_thinking:
                             if not is_printing_thinking:
-                                print("Thinking:\n-----------------------------------------------------------")
+                                log.debug("Thinking:\n-----------------------------------------------------------")
                                 is_printing_thinking = True
                             sys.stdout.write(val_thinking)
                             sys.stdout.flush()
@@ -102,19 +106,19 @@ Do NOT DELETE/CHANGE/ADD any INFORMATION or FIELDS!
                         collected_content.append(current_content_chunk)
                         if self.debug_answer:
                             if is_printing_thinking and not is_printing_answer:
-                                print("\n-----------------------------------------------------------\n")
+                                log.debug("\n-----------------------------------------------------------\n")
                                 is_printing_thinking = False
                             if not is_printing_answer:
-                                print("Answer:\n-----------------------------------------------------------")
+                                log.debug("Answer:\n-----------------------------------------------------------")
                                 is_printing_answer = True
                             sys.stdout.write(current_content_chunk)
                             sys.stdout.flush()
 
             # Завершение стриминга
             if is_printing_thinking:
-                print("\n-----------------------------------------------------------\n")
+                log.debug("\n-----------------------------------------------------------\n")
             elif is_printing_answer:
-                print("\n-----------------------------------------------------------\n")
+                log.debug("\n-----------------------------------------------------------\n")
 
             final_text = "".join(collected_content).strip()
 
@@ -126,7 +130,7 @@ Do NOT DELETE/CHANGE/ADD any INFORMATION or FIELDS!
             return final_text
 
         except Exception as e:
-            print(f"Ollama Error: {e}")
+            log.warning(f"Ollama Error: {e}")
             return ""
     def optimize_context(self, task: str, file_metadata: list) -> dict:
         """
@@ -182,6 +186,6 @@ FILES:
                     if isinstance(parsed, dict):
                         return parsed
         except Exception as e:
-            print(f"Optimization LLM Error: {e}")
+            log.warning(f"Optimization LLM Error: {e}")
         # Fallback
         return {meta['path']: 50 for meta in file_metadata}

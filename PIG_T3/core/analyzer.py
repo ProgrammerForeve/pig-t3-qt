@@ -1,7 +1,11 @@
+import logging
 import os
 import sys
 from datetime import datetime
 from ..config import EXTENSION_TO_MARKDOWN
+
+log = logging.getLogger("pig_t3.core.analyzer")
+
 
 
 class ProjectAnalyzer:
@@ -63,7 +67,7 @@ class ProjectAnalyzer:
             "    \"action\": \"create\",",
             "    \"path\": \"path/to/new_file.py\",",
             "    \"explanation\": \"Created utility script for XYZ\",",
-            "    \"content\": \"print('Hello World')\\n\"",
+            "    \"content\": \"log.debug('Hello World')\\n\"",
             "  },",
             "  {",
             "    \"action\": \"delete\",",
@@ -87,7 +91,7 @@ class ProjectAnalyzer:
             "       {",
             "         \"type\": \"insert_after_line\",",
             "         \"line\": 15,",
-            "         \"content\": \"    print('Debug info')\"",
+            "         \"content\": \"    log.debug('Debug info')\"",
             "       }",
             "    ]",
             "  },",
@@ -248,7 +252,7 @@ class ProjectAnalyzer:
                     total_lines += lines_count
                     total_chars += len(content)
                 except Exception as e:
-                    print(f"Ошибка чтения {rel_path}: {e}")
+                    log.warning(f"Ошибка чтения {rel_path}: {e}")
             else:
                 dir_name = os.path.dirname(rel_path)
                 _, real_ext = os.path.splitext(rel_path)
@@ -320,7 +324,7 @@ class ProjectAnalyzer:
                         with open(m["full_path"], encoding="utf-8", errors="replace") as src:
                             content = src.read()
                     except Exception as e:
-                        print(f"Ошибка повторного чтения {m['rel_path']}: {e}")
+                        log.warning(f"Ошибка повторного чтения {m['rel_path']}: {e}")
                         continue
 
                     if line_numbers:

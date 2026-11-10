@@ -1,9 +1,13 @@
+import logging
 import os
 import ast
 import hashlib
 import json
 from typing import List, Dict, Set, Optional, Tuple
 from .dependency_graph import DependencyGraph
+
+log = logging.getLogger("pig_t3.core.context_optimizer")
+
 
 class ContextOptimizer:
     """
@@ -104,7 +108,7 @@ class ContextOptimizer:
 
                 llm_success = True
             except Exception as e:
-                print(f"LLM Ranking Error: {e}")
+                log.warning(f"LLM Ranking Error: {e}")
                 if fallback_callback:
                     fallback_callback(f"Не удалось использовать LLM ({e}). Выполняется оффлайн поиск.")
                 llm_success = False

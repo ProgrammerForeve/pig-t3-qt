@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from importlib import metadata
 
 from PySide6.QtCore import Qt, QTimer
@@ -27,6 +28,9 @@ from .tabs.generator import GeneratorTab
 from .tabs.info import InfoTab
 from .tabs.plan import PlanTab
 from .tabs.quality import QualityTab
+
+log = logging.getLogger("pig_t3.gui_qt.main_window")
+
 
 _TAB_KEYS = ["generator", "info", "editor", "plan", "quality"]
 
@@ -220,9 +224,9 @@ class MainWindow(QMainWindow):
                     try:
                         widget.set_path(root)
                     except Exception as e:
-                        print(f"{key}.set_path error: {e}")
+                        log.warning(f"{key}.set_path error: {e}")
         except Exception as e:
-            print(f"_on_generator_settings_changed error: {e}")
+            log.warning(f"_on_generator_settings_changed error: {e}")
 
     def closeEvent(self, event) -> None:
         try:
@@ -250,5 +254,5 @@ class MainWindow(QMainWindow):
                 self.settings.update(generator.capture_tree_state())
             save_migrated(self.config, self.settings)
         except Exception as e:
-            print(f"Ошибка сохранения настроек при выходе: {e}")
+            log.warning(f"Ошибка сохранения настроек при выходе: {e}")
         event.accept()

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import sys
 
@@ -54,6 +55,8 @@ from ..workers.optimize_worker import OptimizeWorker
 
 _RECENT_PROJECTS_LIMIT = 10
 _TREE_REFRESH_DELAY_MS = 600
+
+log = logging.getLogger("pig_t3.generator")
 
 
 def _show_info_dialog(parent, title: str, text: str) -> None:
@@ -413,7 +416,7 @@ class GeneratorTab(QWidget):
             self.tree_model.set_unchecked_paths(unchecked_rel)
             self.status_label.setText(f"✅ Оптимизация завершена. Выбрано файлов: {len(selected_rel)}")
         except Exception as e:
-            print(f"Error applying optimization: {e}")
+            log.warning("Error applying optimization: %s", e)
             self.status_label.setText(f"⚠️ Ошибка применения: {e}")
 
     def _on_optimization_error(self, msg: str) -> None:
@@ -434,7 +437,7 @@ class GeneratorTab(QWidget):
                     thread.terminate()
                     thread.wait(1000)
             except RuntimeError as e:
-                print(f"opt thread cleanup: {e}")
+                log.warning("opt thread cleanup: %s", e)
         self._detach_worker_from_thread(worker)
         self.progress_bar.setVisible(False)
         self.btn_optimize.setEnabled(True)
@@ -544,7 +547,7 @@ class GeneratorTab(QWidget):
                 "ui_tree_unchecked": self.tree_model.unchecked_paths(),
             }
         except Exception as e:
-            print(f"Error capturing tree state: {e}")
+            log.warning("Error capturing tree state: %s", e)
             return {"ui_tree_expanded": [], "ui_tree_unchecked": []}
 
     def refresh_tree(self) -> None:
@@ -566,7 +569,7 @@ class GeneratorTab(QWidget):
                 saved_unchecked = self.tree_model.unchecked_paths()
                 saved_expanded = self._capture_expanded_paths()
             except Exception as e:
-                print(f"Error capturing state before refresh: {e}")
+                log.warning("Error capturing state before refresh: %s", e)
                 saved_unchecked = []
                 saved_expanded = []
         else:
@@ -592,7 +595,7 @@ class GeneratorTab(QWidget):
         try:
             files, _empty = self.analyzer.scan_directory(cfg)
         except Exception as e:
-            print(f"Tree scan error: {e}")
+            log.warning("Tree scan error: %s", e)
             files = []
         self.tree_model.reset_data(files, root)
 
@@ -642,13 +645,13 @@ class GeneratorTab(QWidget):
                 for i in range(self.tree_model.rowCount(index)):
                     walk(self.tree_model.index(i, 0, index))
             except Exception as e:
-                print(f"walk error at expanded capture: {e}")
+                log.warning("walk error at expanded capture: %s", e)
 
         try:
             for i in range(self.tree_model.rowCount(QModelIndex())):
                 walk(self.tree_model.index(i, 0, QModelIndex()))
         except Exception as e:
-            print(f"Error capturing expanded paths: {e}")
+            log.warning("Error capturing expanded paths: %s", e)
         return result
 
     def _schedule_expanded_restore(self, paths: list[str]) -> None:
@@ -837,7 +840,7 @@ class GeneratorTab(QWidget):
                     thread.terminate()
                     thread.wait(1000)
             except RuntimeError as e:
-                print(f"thread cleanup: {e}")
+                log.warning("thread cleanup: %s", e)
         # Вернуть worker в main-thread до того, как Python GC его
         # соберёт. moveToThread(dead_thread) делает affinity
         # невалидной; QObject::~QObject из main-thread на объекте с

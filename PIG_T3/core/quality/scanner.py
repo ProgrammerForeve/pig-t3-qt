@@ -1,9 +1,13 @@
+import logging
 import os
 import sys
 import json
 import subprocess
 from typing import Dict, List
 from .models import FileMetrics, Issue
+
+log = logging.getLogger("pig_t3.core.quality.scanner")
+
 
 
 class ProjectScanner:
@@ -92,7 +96,7 @@ class ProjectScanner:
             notify(100, "Python файлы не найдены.")
             return []
 
-        print(f"[DEBUG] Found {total_files} python files to scan.")
+        log.debug(f"[DEBUG] Found {total_files} python files to scan.")
 
         # Chunking logic to avoid command line length limits and freezing
         chunk_size = self.chunk_size
@@ -121,9 +125,9 @@ class ProjectScanner:
                                 avg_cc = total_cc / len(metrics)
                                 results_map[key].complexity = round(avg_cc, 1)
                 except Exception as e:
-                    print(f"Radon CC chunk error: {e}")
+                    log.warning(f"Radon CC chunk error: {e}")
         except Exception as e:
-            print(f"Radon CC fatal: {e}")
+            log.debug(f"Radon CC fatal: {e}")
 
         # 4. Radon MI
         notify(30, "Индекс поддерживаемости (Radon)...")
@@ -143,9 +147,9 @@ class ProjectScanner:
                         if key in results_map:
                             results_map[key].maintainability = round(metric_data.get('mi', 0.0), 1)
                 except Exception as e:
-                    print(f"Radon MI chunk error: {e}")
+                    log.warning(f"Radon MI chunk error: {e}")
         except Exception as e:
-            print(f"Radon MI fatal: {e}")
+            log.debug(f"Radon MI fatal: {e}")
 
         # 5. Pylint
         notify(45, "Проверка качества (Pylint)...")
@@ -193,7 +197,7 @@ class ProjectScanner:
                     except json.JSONDecodeError:
                         pass
         except Exception as e:
-            print(f"Pylint error: {e}")
+            log.warning(f"Pylint error: {e}")
 
         # 6. Vulture (Dead code)
         notify(80, "Поиск мертвого кода (Vulture)...")
@@ -219,7 +223,7 @@ class ProjectScanner:
             else:
                 notify(85, "Skipping Vulture (too many files)...")
         except Exception as e:
-            print(f"Vulture error: {e}")
+            log.warning(f"Vulture error: {e}")
 
         # 7. Bandit
         notify(90, "Аудит безопасности (Bandit)...")
@@ -259,7 +263,7 @@ class ProjectScanner:
             else:
                 notify(95, "Skipping Bandit (too many files)...")
         except Exception as e:
-            print(f"Bandit error: {e}")
+            log.warning(f"Bandit error: {e}")
 
         notify(100, "Готово!")
 

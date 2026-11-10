@@ -10,6 +10,7 @@ default implementation) для тестируемости.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Callable
 
@@ -35,6 +36,8 @@ RULES:
 
 [PROJECT CONTEXT]
 {context}"""
+
+log = logging.getLogger("pig_t3.gui_qt.app")
 
 
 class GeneratePlanWorker(QObject):
@@ -106,7 +109,7 @@ class GeneratePlanWorker(QObject):
                 rel = os.path.relpath(path, self._root).replace("\\", "/")
                 parts.append(f'<file path="{rel}">\n{content}\n</file>\n\n')
             except Exception as e:
-                print(f"context build: skip {path}: {e}")
+                log.warning("context build: skip %s: %s", path, e)
         return "".join(parts)
 
     def _parse_plan(self, response: str) -> list[dict]:

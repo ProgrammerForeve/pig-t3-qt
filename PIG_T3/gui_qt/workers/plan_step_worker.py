@@ -12,6 +12,7 @@ DI-параметры (для тестов):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from typing import Callable
@@ -20,7 +21,10 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from ...core.patcher import apply_llm_changes, clean_json_text
 
+log = logging.getLogger("pig_t3.gui_qt.app")
+
 _EXEC_PROMPT = """You are a coding assistant executing a specific step of a project plan.
+log = logging.getLogger("pig_t3.plan_step_worker")
 
 FULL PROJECT PLAN:
 {plan_json}
@@ -162,7 +166,7 @@ class PlanStepWorker(QObject):
                 rel = os.path.relpath(path, self._root).replace("\\", "/")
                 parts.append(f'<file path="{rel}">\n{content}\n</file>\n\n')
             except Exception as e:
-                print(f"context build: skip {path}: {e}")
+                log.warning("context build: skip %s: %s", path, e)
         return "".join(parts)
 
     def _build_prompt(self, context: str) -> str:

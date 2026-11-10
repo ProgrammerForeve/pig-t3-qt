@@ -1,6 +1,10 @@
 import json
+import logging
 import os
 import sys
+
+log = logging.getLogger("pig_t3.config")
+
 
 # Константа расширений
 EXTENSION_TO_MARKDOWN = {
@@ -97,4 +101,4 @@ class ConfigManager:
             with open(self.config_file, "w", encoding="utf-8") as f:
                 f.write(json_str)
         except Exception as e:
-            print(f"Не удалось сохранить настройки: {e}")
+            log.warning(f"Не удалось сохранить настройки: {e}")
