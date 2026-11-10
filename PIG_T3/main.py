@@ -34,7 +34,11 @@ _protect_std_streams()
 import faulthandler as _faulthandler  # noqa: E402
 
 try:
-    _crash_log = open("/tmp/pig_crash.log", "a")  # noqa: SIM115
+    import tempfile
+    from pathlib import Path
+
+    _crash_log_path = Path(tempfile.gettempdir()) / "pig_crash.log"
+    _crash_log = open(_crash_log_path, "a", encoding="utf-8")  # noqa: SIM115
     _faulthandler.enable(file=_crash_log, all_threads=True)
 except Exception:
     _faulthandler.enable(all_threads=True)
