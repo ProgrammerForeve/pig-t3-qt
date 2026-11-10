@@ -79,6 +79,8 @@ class PlanTab(QWidget):
         self._gen_plan_worker: GeneratePlanWorker | None = None
         self._exec_thread: QThread | None = None
         self._exec_worker: PlanStepWorker | None = None
+        self._full_plan_running: bool = False
+        self._full_plan_cancel: bool = False
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(_SAVE_DEBOUNCE_MS)
@@ -172,8 +174,13 @@ class PlanTab(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximumWidth(300)
         self.progress_bar.setVisible(False)
+        self.progress_global = QProgressBar()
+        self.progress_global.setMaximumWidth(200)
+        self.progress_global.setFormat("%v / %m шагов")
+        self.progress_global.setVisible(False)
         self.status_label = QLabel("Готов")
         progress_row.addWidget(self.progress_bar)
+        progress_row.addWidget(self.progress_global)
         progress_row.addWidget(self.status_label, 1)
         layout.addLayout(progress_row)
 
@@ -193,7 +200,7 @@ class PlanTab(QWidget):
 
         # T-405..T-409 — заглушки на этом этапе
         self.btn_exec_selected.clicked.connect(self._on_exec_selected_clicked)
-        self.btn_exec_full.clicked.connect(self._on_exec_full_stub)  # T-407
+        self.btn_exec_full.clicked.connect(self._on_exec_full_clicked)
         self.btn_retry.clicked.connect(self._on_retry_clicked)
 
     # ---------- Public ----------
@@ -254,6 +261,8 @@ class PlanTab(QWidget):
                     thread.wait(3000)
         self._gen_plan_worker = None
         self._exec_worker = None
+        self._full_plan_running = False
+        self._full_plan_cancel = False
 
     # ---------- List rendering ----------
 
@@ -563,6 +572,11 @@ class PlanTab(QWidget):
             self._refresh_list()
             self.plan_list.setCurrentRow(idx)
         self.status_label.setText(f"✅ Шаг выполнен: {step.get('title', '')}")
+        if self._full_plan_running:
+            if self._full_plan_cancel:
+                self._finish_full_plan("отменён")
+            else:
+                QTimer.singleShot(0, self._run_next_full_plan_step)
 
     def _on_exec_error(self, step: dict, msg: str) -> None:
         idx = -1
@@ -576,6 +590,9 @@ class PlanTab(QWidget):
             self.save_plan_silently()
             self._refresh_list()
         self.status_label.setText(f"❌ Ошибка: {msg}")
+        if self._full_plan_running:
+            # Останавливаем весь пайплайн — legacy тоже так делал
+            self._finish_full_plan("остановлен из-за ошибки")
         _show_error(self, "Ошибка выполнения", msg)
 
     def _on_exec_cancelled(self) -> None:
@@ -607,11 +624,72 @@ class PlanTab(QWidget):
         with contextlib.suppress(RuntimeError, AttributeError):
             worker.moveToThread(QThread.currentThread())
 
-    def _on_exec_full_stub(self) -> None:
-        self._show_warning_stub(
-            "Выполнение",
-            "Выполнение всего плана будет реализовано в T-407.",
-        )
+    def _on_exec_full_clicked(self) -> None:
+        if self._full_plan_running:
+            # Кнопка уже нажата повторно — отменяем
+            self._full_plan_cancel = True
+            self.btn_exec_full.setEnabled(False)
+            self.btn_exec_full.setText("⏹ ОСТАНОВКА...")
+            thread = self._exec_thread
+            if thread is not None:
+                with contextlib.suppress(RuntimeError):
+                    thread.requestInterruption()
+            return
+
+        if not self.plan_data:
+            _show_warning(self, "Внимание", "План пуст.")
+            return
+        if all(s.get("completed") for s in self.plan_data):
+            _show_warning(self, "Внимание", "Все шаги уже выполнены.")
+            return
+        if self.model_combo.currentText() in ("", "None"):
+            _show_warning(self, "Внимание", "Выберите модель LLM.")
+            return
+        if not self._current_path or not os.path.isdir(self._current_path):
+            _show_warning(self, "Ошибка", "Папка проекта не существует.")
+            return
+
+        self._full_plan_running = True
+        self._full_plan_cancel = False
+        self.btn_exec_full.setText("⏹ ОСТАНОВИТЬ ПОЛНЫЙ ПЛАН")
+        self.progress_global.setVisible(True)
+        self.progress_global.setRange(0, len(self.plan_data))
+        self.progress_global.setValue(0)
+        self._run_next_full_plan_step()
+
+    def _run_next_full_plan_step(self) -> None:
+        if not self._full_plan_running:
+            return
+        if self._full_plan_cancel:
+            self._finish_full_plan("отменён")
+            return
+        next_idx = -1
+        for i, s in enumerate(self.plan_data):
+            if not s.get("completed"):
+                next_idx = i
+                break
+        if next_idx < 0:
+            self.progress_global.setValue(len(self.plan_data))
+            self._finish_full_plan("завершён")
+            return
+
+        step = self.plan_data[next_idx]
+        self.plan_list.setCurrentRow(next_idx)
+        self.progress_global.setValue(next_idx)
+        self.status_label.setText(f"Выполнение шага {next_idx + 1}/{len(self.plan_data)}: {step.get('title', '')}")
+        model = self.model_combo.currentText()
+        self._start_exec_step(step, model)
+
+    def _finish_full_plan(self, status: str) -> None:
+        self._full_plan_running = False
+        self._full_plan_cancel = False
+        self.btn_exec_full.setText("▶️ ВЫПОЛНИТЬ ВЕСЬ ПЛАН")
+        self.btn_exec_full.setEnabled(True)
+        self.btn_exec_selected.setEnabled(True)
+        self.btn_new_plan.setEnabled(True)
+        self.progress_global.setVisible(False)
+        self.status_label.setText(f"Полный план {status}.")
+        self._refresh_list()
 
     @staticmethod
     def _show_warning_stub(title: str, text: str) -> None:

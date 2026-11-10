@@ -276,3 +276,162 @@ def test_exec_selected_warns_without_path(qtbot, monkeypatch):
     tab._on_exec_selected_clicked()
     assert warns
     assert tab._exec_thread is None
+
+
+# ---------- T-407: выполнение всего плана ----------
+
+
+def test_exec_full_warns_on_empty_plan(qtbot, monkeypatch):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    warns: list[str] = []
+    monkeypatch.setattr(
+        plan_module,
+        "_show_warning",
+        lambda parent, title, text: warns.append(text),
+    )
+    tab = PlanTab({"root_folder": ""})
+    qtbot.addWidget(tab)
+    tab._on_exec_full_clicked()
+    assert warns
+    assert not tab._full_plan_running
+
+
+def test_exec_full_warns_all_completed(qtbot, monkeypatch):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    warns: list[str] = []
+    monkeypatch.setattr(
+        plan_module,
+        "_show_warning",
+        lambda parent, title, text: warns.append(text),
+    )
+    tab = PlanTab({"root_folder": "/tmp"})
+    qtbot.addWidget(tab)
+    tab.plan_data = [
+        {"id": "s1", "title": "T1", "completed": True, "status": "completed"},
+    ]
+    tab._refresh_list()
+    tab._on_exec_full_clicked()
+    assert warns
+    assert not tab._full_plan_running
+
+
+def test_exec_full_warns_without_model(qtbot, monkeypatch, tmp_path):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    warns: list[str] = []
+    monkeypatch.setattr(
+        plan_module,
+        "_show_warning",
+        lambda parent, title, text: warns.append(text),
+    )
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.plan_data = [
+        {"id": "s1", "title": "T1", "completed": False, "status": "pending"},
+    ]
+    tab._refresh_list()
+    tab.model_combo.setCurrentText("None")
+    tab._on_exec_full_clicked()
+    assert warns
+    assert not tab._full_plan_running
+
+
+def test_finish_full_plan_restores_ui(qtbot, tmp_path):
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab._full_plan_running = True
+    tab._full_plan_cancel = False
+    tab.btn_exec_full.setText("⏹ ОСТАНОВИТЬ")
+    tab.progress_global.setVisible(True)
+    tab._finish_full_plan("завершён")
+    assert not tab._full_plan_running
+    assert not tab._full_plan_cancel
+    assert "ВЫПОЛНИТЬ ВЕСЬ ПЛАН" in tab.btn_exec_full.text()
+    assert not tab.progress_global.isVisible()
+
+
+def test_run_next_picks_first_incomplete(qtbot, tmp_path, monkeypatch):
+    (tmp_path / ".pig").mkdir()
+    captured: list[dict] = []
+
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.plan_data = [
+        {"id": "s1", "title": "T1", "completed": True, "status": "completed"},
+        {"id": "s2", "title": "T2", "completed": False, "status": "pending"},
+        {"id": "s3", "title": "T3", "completed": False, "status": "pending"},
+    ]
+    tab._refresh_list()
+    tab.model_combo.setCurrentText("BomjAPI")
+
+    # Перехватываем _start_exec_step, чтобы не запускать реальный воркер
+    def _fake_start(step, model_name):
+        captured.append(step)
+
+    monkeypatch.setattr(tab, "_start_exec_step", _fake_start)
+    tab._full_plan_running = True
+    tab._run_next_full_plan_step()
+    assert captured
+    assert captured[0]["id"] == "s2"
+
+
+def test_on_exec_done_triggers_next_step(qtbot, tmp_path, monkeypatch):
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.plan_data = [
+        {"id": "s1", "title": "T1", "completed": True, "status": "completed"},
+        {"id": "s2", "title": "T2", "completed": False, "status": "pending"},
+    ]
+    tab._refresh_list()
+
+    next_step_calls: list[int] = []
+    monkeypatch.setattr(
+        tab,
+        "_run_next_full_plan_step",
+        lambda: next_step_calls.append(1),
+    )
+    tab._full_plan_running = True
+    tab._full_plan_cancel = False
+
+    completed_step = dict(tab.plan_data[0])
+    tab._on_exec_done(completed_step, "log")
+    qtbot.wait(50)  # singleShot(0) — отработка
+    assert next_step_calls
+
+
+def test_on_exec_error_stops_full_plan(qtbot, tmp_path, monkeypatch):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    monkeypatch.setattr(plan_module, "_show_error", lambda *a, **kw: None)
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.plan_data = [
+        {"id": "s1", "title": "T1", "completed": False, "status": "pending"},
+    ]
+    tab._refresh_list()
+    tab._full_plan_running = True
+
+    step = dict(tab.plan_data[0])
+    tab._on_exec_error(step, "boom")
+    assert not tab._full_plan_running
+
+
+def test_exec_full_cancel_flag(qtbot, tmp_path):
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.plan_data = [
+        {"id": "s1", "title": "T1", "completed": False, "status": "pending"},
+    ]
+    tab._refresh_list()
+    tab._full_plan_running = True
+    tab._full_plan_cancel = False
+    tab.btn_exec_full.setText("⏹ ОСТАНОВИТЬ ПОЛНЫЙ ПЛАН")
+    tab._on_exec_full_clicked()  # повторный клик → отмена
+    assert tab._full_plan_cancel is True
