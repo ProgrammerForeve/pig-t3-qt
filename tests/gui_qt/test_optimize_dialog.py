@@ -20,10 +20,14 @@ MODELS = ["None", "BomjAPI", "Web: Gemini", "qwen2.5-coder"]
 
 @pytest.fixture
 def base_settings():
+    import time
+
     return {
         "opt_default_model": "Web: Gemini",
         "opt_compression_pct": 40,
         "opt_bfs_depth": 3,
+        # свежий кэш → воркер не стартует в тестах
+        "ollama_models_cache": {"models": [], "ts": time.time()},
     }
 
 
@@ -37,7 +41,7 @@ def test_init_from_settings(qtbot, base_settings):
 
 def test_unknown_model_falls_back_to_first(qtbot):
     settings = {"opt_default_model": "ghost", "opt_compression_pct": 50}
-    dlg = OptimizeDialog(settings, total_tokens=1000, models=MODELS)
+    dlg = OptimizeDialog(settings, total_tokens=1000, models=MODELS, auto_fetch_models=False)
     qtbot.addWidget(dlg)
     assert dlg.model_combo.currentText() == "None"
 

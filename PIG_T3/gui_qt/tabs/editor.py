@@ -28,6 +28,12 @@ from PySide6.QtWidgets import (
 
 from ...core.patcher import clean_json_text
 from ..workers.apply_worker import ApplyWorker, UndoRedoWorker
+from ..workers.ollama_models_worker import (
+    OllamaModelsWorker,
+    cache_is_fresh,
+    get_cached_models,
+    save_models_to_cache,
+)
 
 _HISTORY_LIMIT = 10
 
@@ -67,6 +73,8 @@ class EditorTab(QWidget):
 
         self._apply_thread: QThread | None = None
         self._apply_worker: ApplyWorker | None = None
+        self._models_thread: QThread | None = None
+        self._models_worker: OllamaModelsWorker | None = None
         self._undo_thread: QThread | None = None
         self._undo_worker: UndoRedoWorker | None = None
 
@@ -138,20 +146,60 @@ class EditorTab(QWidget):
         layout.addWidget(self.status_label)
 
     def _populate_models(self) -> None:
-        web_models = [
+        base = [
+            "None",
+            "BomjAPI",
             "Web: Gemini",
             "Web: DeepSeek",
             "Web: DeepSeek (DeepThink)",
             "Web: DeepSeek Expert",
             "Web: DeepSeek Expert (DeepThink)",
         ]
-        models = ["None", "BomjAPI", *web_models]
-        # Ollama может быть не запущена — молча пропускаем
-        with contextlib.suppress(Exception):
-            from ...core.ollama_client import get_installed_models
+        cached = get_cached_models(self.settings)
+        for m in cached:
+            if m not in base:
+                base.append(m)
+        self.model_combo.addItems(base)
+        if not cache_is_fresh(self.settings):
+            self._fetch_models_async()
 
-            models.extend(get_installed_models())
-        self.model_combo.addItems(models)
+    def _fetch_models_async(self) -> None:
+        if self._models_thread is not None:
+            return
+        self._models_worker = OllamaModelsWorker()
+        self._models_thread = QThread(self)
+        self._models_worker.moveToThread(self._models_thread)
+        self._models_thread.started.connect(self._models_worker.run)
+        self._models_worker.done.connect(self._on_models_fetched)
+        self._models_worker.error.connect(self._on_models_error)
+        for sig in (self._models_worker.done, self._models_worker.error):
+            sig.connect(self._cleanup_models_thread)
+        self._models_thread.start()
+
+    def _on_models_fetched(self, models: list) -> None:
+        save_models_to_cache(self.settings, models)
+        current = self.model_combo.currentText()
+        existing = {self.model_combo.itemText(i) for i in range(self.model_combo.count())}
+        for m in models:
+            if m not in existing:
+                self.model_combo.addItem(m)
+        idx = self.model_combo.findText(current)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+
+    def _on_models_error(self, _msg: str) -> None:
+        pass
+
+    def _cleanup_models_thread(self, *_args) -> None:
+        thread = self._models_thread
+        self._models_thread = None
+        self._models_worker = None
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except RuntimeError:
+                pass
 
     def _populate(self) -> None:
         opts = self.settings.get("ollama_options", {})
@@ -353,6 +401,7 @@ class EditorTab(QWidget):
 
     def stop_workers(self) -> None:
         """Остановка для MainWindow.closeEvent."""
+        self._cleanup_models_thread()
         for thread_attr in ("_apply_thread", "_undo_thread"):
             thread = getattr(self, thread_attr, None)
             if thread is not None:

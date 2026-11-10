@@ -21,7 +21,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -35,6 +35,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..workers.ollama_models_worker import (
+    OllamaModelsWorker,
+    cache_is_fresh,
+    get_cached_models,
+    save_models_to_cache,
+)
+
 
 def _show_warning_dialog(parent, title: str, text: str) -> None:
     """Обёртка над QMessageBox.warning (см. ADR-008 обёрток)."""
@@ -42,21 +49,16 @@ def _show_warning_dialog(parent, title: str, text: str) -> None:
 
 
 def _default_models() -> list[str]:
-    """None + BomjAPI + Web-модели + всё, что установлено в Ollama."""
-    web_models = [
+    """None + BomjAPI + Web-модели. Ollama — отдельно, асинхронно."""
+    return [
+        "None",
+        "BomjAPI",
         "Web: Gemini",
         "Web: DeepSeek",
         "Web: DeepSeek (DeepThink)",
         "Web: DeepSeek Expert",
         "Web: DeepSeek Expert (DeepThink)",
     ]
-    try:
-        from ...core.ollama_client import get_installed_models
-
-        ollama = get_installed_models()
-    except Exception:
-        ollama = []
-    return ["None", "BomjAPI", *web_models, *ollama]
 
 
 class OptimizeDialog(QDialog):
@@ -68,16 +70,34 @@ class OptimizeDialog(QDialog):
         total_tokens: int,
         parent=None,
         models: list[str] | None = None,
+        auto_fetch_models: bool = True,
     ):
         super().__init__(parent)
         self.settings = dict(settings)
         self.total_tokens = max(1, int(total_tokens))
-        self._models = models if models is not None else _default_models()
+        explicit_models = models is not None
+        if explicit_models:
+            self._models = list(models)
+        else:
+            base = _default_models()
+            cached = get_cached_models(self.settings)
+            for m in cached:
+                if m not in base:
+                    base.append(m)
+            self._models = base
+
+        self._models_thread: QThread | None = None
+        self._models_worker: OllamaModelsWorker | None = None
 
         self._setup_ui()
         self._populate()
         self._connect_signals()
         self._update_estimate()
+
+        # Если models переданы явно — caller контролирует список,
+        # воркер не нужен (важно для тестов: не дёргаем Ollama в фоне).
+        if not explicit_models and auto_fetch_models and not cache_is_fresh(self.settings):
+            self._fetch_models_async()
 
     # ---------- UI ----------
 
@@ -150,6 +170,49 @@ class OptimizeDialog(QDialog):
         self.pct_value_label.setText(f"{pct}%")
         tokens = max(1, int(self.total_tokens * (pct / 100.0)))
         self.estimate_label.setText(f"Ожидаемо токенов: ~{tokens} (из ~{self.total_tokens})")
+
+    def _fetch_models_async(self) -> None:
+        if self._models_thread is not None:
+            return
+        self._models_worker = OllamaModelsWorker()
+        self._models_thread = QThread(self)
+        self._models_worker.moveToThread(self._models_thread)
+        self._models_thread.started.connect(self._models_worker.run)
+        self._models_worker.done.connect(self._on_models_fetched)
+        self._models_worker.error.connect(self._on_models_error)
+        for sig in (self._models_worker.done, self._models_worker.error):
+            sig.connect(self._cleanup_models_thread)
+        self._models_thread.start()
+
+    def _on_models_fetched(self, models: list) -> None:
+        save_models_to_cache(self.settings, models)
+        current = self.model_combo.currentText()
+        existing = {self.model_combo.itemText(i) for i in range(self.model_combo.count())}
+        for m in models:
+            if m not in existing:
+                self.model_combo.addItem(m)
+        idx = self.model_combo.findText(current)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+
+    def _on_models_error(self, _msg: str) -> None:
+        # Ollama не запущена — молча, у пользователя остаются base-модели
+        pass
+
+    def _cleanup_models_thread(self, *_args) -> None:
+        thread = self._models_thread
+        self._models_thread = None
+        self._models_worker = None
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except RuntimeError:
+                pass
+
+    def closeEvent(self, event) -> None:
+        self._cleanup_models_thread()
+        super().closeEvent(event)
 
     def _on_start(self) -> None:
         task = self.task_edit.toPlainText().strip()
