@@ -16,6 +16,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import subprocess
+from datetime import datetime
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -81,6 +83,8 @@ class PlanTab(QWidget):
         self._exec_worker: PlanStepWorker | None = None
         self._full_plan_running: bool = False
         self._full_plan_cancel: bool = False
+        self._git_available: bool = False
+        self._git_repo_path: str | None = None
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(_SAVE_DEBOUNCE_MS)
@@ -519,9 +523,20 @@ class PlanTab(QWidget):
         self._start_exec_step(step, model)
 
     def _on_retry_clicked(self) -> None:
+        """Retry: выделить первый failed-шаг и выполнить его."""
+        for i, s in enumerate(self.plan_data):
+            if s.get("status") == "failed":
+                self.plan_list.setCurrentRow(i)
+                break
         self._on_exec_selected_clicked()
 
     def _start_exec_step(self, step: dict, model_name: str) -> None:
+        # Git pre-step (sync, короткие таймауты — безопасно)
+        if self.settings.get("git_enabled", False):
+            self._check_git()
+            if self._git_available:
+                self._git_commit_before_plan()
+
         self.btn_exec_selected.setEnabled(False)
         self.btn_exec_full.setEnabled(False)
         self.btn_retry.setEnabled(False)
@@ -572,6 +587,8 @@ class PlanTab(QWidget):
             self._refresh_list()
             self.plan_list.setCurrentRow(idx)
         self.status_label.setText(f"✅ Шаг выполнен: {step.get('title', '')}")
+        if self.settings.get("git_auto_push", False) and self._git_available:
+            self._git_push()
         if self._full_plan_running:
             if self._full_plan_cancel:
                 self._finish_full_plan("отменён")
@@ -589,6 +606,8 @@ class PlanTab(QWidget):
             self.plan_data[idx]["report"] = f"Ошибка: {msg}"
             self.save_plan_silently()
             self._refresh_list()
+            # Выделить failed-шаг, чтобы _cleanup_exec_thread включил btn_retry
+            self.plan_list.setCurrentRow(idx)
         self.status_label.setText(f"❌ Ошибка: {msg}")
         if self._full_plan_running:
             # Останавливаем весь пайплайн — legacy тоже так делал
@@ -615,6 +634,92 @@ class PlanTab(QWidget):
             step = self.plan_data[self._current_index]
             self.btn_retry.setEnabled(step.get("status") == "failed")
         self.progress_bar.setVisible(False)
+
+    # ---------- Git integration (T-409) ----------
+
+    def _check_git(self) -> bool:
+        """Проверить наличие git и что _current_path внутри репозитория."""
+        try:
+            subprocess.run(
+                ["git", "--version"],
+                capture_output=True,
+                check=True,
+                timeout=5,
+            )
+        except Exception:
+            self._git_available = False
+            self._git_repo_path = None
+            return False
+        try:
+            result = subprocess.run(
+                ["git", "-C", self._current_path, "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                self._git_available = True
+                self._git_repo_path = result.stdout.strip()
+                return True
+        except Exception as e:
+            print(f"git rev-parse failed: {e}")
+        self._git_available = False
+        self._git_repo_path = None
+        return False
+
+    def _git_commit_before_plan(self) -> bool:
+        """Сделать коммит «перед выполнением шага» + опционально новую ветку."""
+        if not self.settings.get("git_enabled", False) or not self._git_available:
+            return False
+        root = self._git_repo_path
+        if not root:
+            return False
+        try:
+            subprocess.run(
+                ["git", "-C", root, "add", "-A"],
+                check=True,
+                timeout=10,
+            )
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if self.settings.get("git_branch_mode", "new") == "new":
+                branch = f"pig_plan_{timestamp}"
+                subprocess.run(
+                    ["git", "-C", root, "checkout", "-b", branch],
+                    check=True,
+                    timeout=10,
+                )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    root,
+                    "commit",
+                    "-m",
+                    f"PIG-T3: auto-save before plan execution ({timestamp})",
+                ],
+                check=True,
+                timeout=10,
+            )
+            if self.settings.get("git_auto_push", False):
+                self._git_push()
+            return True
+        except Exception as e:
+            print(f"Git auto-commit failed: {e}")
+            return False
+
+    def _git_push(self) -> bool:
+        if not self._git_available or not self._git_repo_path:
+            return False
+        try:
+            subprocess.run(
+                ["git", "-C", self._git_repo_path, "push", "origin", "HEAD"],
+                check=True,
+                timeout=30,
+            )
+            return True
+        except Exception as e:
+            print(f"Git push failed: {e}")
+            return False
 
     @staticmethod
     def _detach_worker_from_thread(worker) -> None:

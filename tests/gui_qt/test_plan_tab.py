@@ -435,3 +435,164 @@ def test_exec_full_cancel_flag(qtbot, tmp_path):
     tab.btn_exec_full.setText("⏹ ОСТАНОВИТЬ ПОЛНЫЙ ПЛАН")
     tab._on_exec_full_clicked()  # повторный клик → отмена
     assert tab._full_plan_cancel is True
+
+
+# ---------- T-408: retry ----------
+
+
+def test_retry_selects_failed_step(qtbot, tmp_path, monkeypatch):
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.plan_data = [
+        {"id": "s1", "title": "T1", "status": "completed", "completed": True},
+        {"id": "s2", "title": "T2", "status": "failed", "completed": False},
+    ]
+    tab._refresh_list()
+
+    captured: list[int] = []
+    monkeypatch.setattr(tab, "_on_exec_selected_clicked", lambda: captured.append(1))
+    tab._on_retry_clicked()
+    assert captured
+    assert tab._current_index == 1
+
+
+def test_on_exec_error_selects_failed_step(qtbot, tmp_path, monkeypatch):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    monkeypatch.setattr(plan_module, "_show_error", lambda *a, **kw: None)
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.plan_data = [
+        {"id": "s1", "title": "T1", "status": "pending", "completed": False},
+        {"id": "s2", "title": "T2", "status": "pending", "completed": False},
+    ]
+    tab._refresh_list()
+    tab._full_plan_running = False
+    tab._on_exec_error(dict(tab.plan_data[1]), "boom")
+    assert tab._current_index == 1
+
+
+# ---------- T-409: git ----------
+
+
+def test_check_git_returns_false_when_git_missing(qtbot, tmp_path, monkeypatch):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    def _fail(*a, **kw):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(plan_module.subprocess, "run", _fail)
+    tab = PlanTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    assert tab._check_git() is False
+    assert tab._git_available is False
+
+
+def test_git_commit_skipped_when_disabled(qtbot, tmp_path):
+    tab = PlanTab({"root_folder": str(tmp_path), "git_enabled": False})
+    qtbot.addWidget(tab)
+    tab._git_available = True
+    tab._git_repo_path = str(tmp_path)
+    assert tab._git_commit_before_plan() is False
+
+
+def test_git_commit_skipped_when_not_available(qtbot, tmp_path):
+    tab = PlanTab({"root_folder": str(tmp_path), "git_enabled": True})
+    qtbot.addWidget(tab)
+    tab._git_available = False
+    assert tab._git_commit_before_plan() is False
+
+
+def test_git_commit_calls_subprocess(qtbot, tmp_path, monkeypatch):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    calls: list[tuple] = []
+
+    class _Res:
+        returncode = 0
+        stdout = ""
+
+    def _run(*args, **kw):
+        calls.append(args)
+        return _Res()
+
+    monkeypatch.setattr(plan_module.subprocess, "run", _run)
+    tab = PlanTab({"root_folder": str(tmp_path), "git_enabled": True})
+    qtbot.addWidget(tab)
+    tab._git_available = True
+    tab._git_repo_path = str(tmp_path)
+    assert tab._git_commit_before_plan() is True
+    flat = " ".join(str(c) for c in calls)
+    assert "add" in flat
+    assert "commit" in flat
+
+
+def test_on_exec_done_pushes_when_auto_push(qtbot, tmp_path, monkeypatch):
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab(
+        {
+            "root_folder": str(tmp_path),
+            "git_auto_push": True,
+        }
+    )
+    qtbot.addWidget(tab)
+    tab.plan_data = [{"id": "s1", "title": "T", "completed": False, "status": "pending"}]
+    tab._refresh_list()
+    tab._git_available = True
+    pushes: list[int] = []
+    monkeypatch.setattr(tab, "_git_push", lambda: pushes.append(1) or True)
+    tab._full_plan_running = False
+
+    updated = dict(tab.plan_data[0])
+    updated["status"] = "completed"
+    tab._on_exec_done(updated, "log")
+    assert pushes
+
+
+def test_start_step_runs_git_when_enabled(qtbot, tmp_path, monkeypatch):
+    """_start_exec_step вызывает _check_git + _git_commit_before_plan."""
+    (tmp_path / ".pig").mkdir()
+    tab = PlanTab(
+        {
+            "root_folder": str(tmp_path),
+            "git_enabled": True,
+        }
+    )
+    qtbot.addWidget(tab)
+    tab.plan_data = [{"id": "s1", "title": "T", "completed": False, "status": "pending"}]
+    tab._refresh_list()
+    tab._current_index = 0
+
+    calls: list[str] = []
+    monkeypatch.setattr(tab, "_check_git", lambda: calls.append("check") or True)
+    tab._git_available = True
+    monkeypatch.setattr(tab, "_git_commit_before_plan", lambda: calls.append("commit") or True)
+
+    # Мокаем воркер и поток, чтобы не запускать реальный QThread
+    from PySide6.QtCore import QObject, QThread, Signal
+
+    class _FakeWorker(QObject):
+        progress = Signal(int, str)
+        done = Signal(dict, str)
+        error = Signal(dict, str)
+        cancelled = Signal()
+
+        def __init__(self, *a, **kw):
+            super().__init__()
+
+        def moveToThread(self, t):
+            pass
+
+        def run(self):
+            pass
+
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    monkeypatch.setattr(plan_module, "PlanStepWorker", _FakeWorker)
+    monkeypatch.setattr(QThread, "start", lambda self: None)
+
+    tab._start_exec_step(tab.plan_data[0], "BomjAPI")
+    assert "check" in calls
+    assert "commit" in calls
