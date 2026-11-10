@@ -3,3 +3,4 @@ app_config.json
 .pig
 *.pyc
 project_context.txt
+check.log
