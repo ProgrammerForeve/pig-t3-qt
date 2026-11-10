@@ -45,6 +45,7 @@ from ..workers.generate_plan_worker import GeneratePlanWorker
 from ..workers.plan_step_worker import PlanStepWorker
 
 _SAVE_DEBOUNCE_MS = 500
+_PLAN_HISTORY_LIMIT = 10
 
 
 def _show_warning(parent, title: str, text: str) -> None:
@@ -85,6 +86,8 @@ class PlanTab(QWidget):
         self._full_plan_cancel: bool = False
         self._git_available: bool = False
         self._git_repo_path: str | None = None
+        self._history_stack: list[list[dict]] = []
+        self._redo_stack: list[list[dict]] = []
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(_SAVE_DEBOUNCE_MS)
@@ -109,8 +112,18 @@ class PlanTab(QWidget):
         top_btns = QHBoxLayout()
         self.btn_refresh = QPushButton("🔄 Обновить")
         self.btn_new_plan = QPushButton("✨ Новый План")
+        self.btn_undo_plan = QPushButton("↩")
+        self.btn_undo_plan.setToolTip("Отменить последнее действие")
+        self.btn_undo_plan.setMaximumWidth(36)
+        self.btn_undo_plan.setEnabled(False)
+        self.btn_redo_plan = QPushButton("↪")
+        self.btn_redo_plan.setToolTip("Повторить отменённое")
+        self.btn_redo_plan.setMaximumWidth(36)
+        self.btn_redo_plan.setEnabled(False)
         top_btns.addWidget(self.btn_refresh)
         top_btns.addWidget(self.btn_new_plan)
+        top_btns.addWidget(self.btn_undo_plan)
+        top_btns.addWidget(self.btn_redo_plan)
         left_layout.addLayout(top_btns)
 
         self.plan_list = QListWidget()
@@ -189,11 +202,12 @@ class PlanTab(QWidget):
         layout.addLayout(progress_row)
 
         self._update_editor_enabled(False)
+        self._update_undo_redo_buttons()
 
     def _connect_signals(self) -> None:
         self.btn_refresh.clicked.connect(self.load_plan)
-        self.btn_new_plan.clicked.connect(self._on_new_plan_clicked)
-        self.btn_delete_step.clicked.connect(self._on_delete_step)
+        self.btn_undo_plan.clicked.connect(self._on_undo_plan)
+        self.btn_redo_plan.clicked.connect(self._on_redo_plan)
         self.plan_list.currentRowChanged.connect(self._on_step_selected)
         self.plan_list.model().rowsMoved.connect(self._on_rows_moved)
 
@@ -269,6 +283,56 @@ class PlanTab(QWidget):
         self._full_plan_cancel = False
 
     # ---------- List rendering ----------
+    # ---------- Undo / Redo (B2) ----------
+
+    def _update_undo_redo_buttons(self) -> None:
+        self.btn_undo_plan.setEnabled(bool(self._history_stack))
+        self.btn_redo_plan.setEnabled(bool(self._redo_stack))
+
+    def _snapshot(self) -> None:
+        """Запомнить текущее plan_data перед mutating action.
+
+        Deep copy — plan_data маленький (10-100 шагов), копия
+        недорогая, зато undo восстанавливает состояние точно.
+        Редо-стек очищается: новая ветка изменений делает
+        старый redo невалидным.
+        """
+        import copy
+
+        snap = copy.deepcopy(self.plan_data)
+        if self._history_stack and self._history_stack[-1] == snap:
+            return  # no-op: ничего не изменилось
+        self._history_stack.append(snap)
+        if len(self._history_stack) > _PLAN_HISTORY_LIMIT:
+            self._history_stack.pop(0)
+        self._redo_stack.clear()
+        self._update_undo_redo_buttons()
+
+    def _on_undo_plan(self) -> None:
+        if not self._history_stack:
+            return
+        import copy
+
+        self._redo_stack.append(copy.deepcopy(self.plan_data))
+        self.plan_data = self._history_stack.pop()
+        self._save_timer.stop()
+        self.save_plan_silently()
+        self._refresh_list()
+        self._update_undo_redo_buttons()
+
+    def _on_redo_plan(self) -> None:
+        if not self._redo_stack:
+            return
+        import copy
+
+        self._history_stack.append(copy.deepcopy(self.plan_data))
+        if len(self._history_stack) > _PLAN_HISTORY_LIMIT:
+            self._history_stack.pop(0)
+        self.plan_data = self._redo_stack.pop()
+        self._save_timer.stop()
+        self.save_plan_silently()
+        self._refresh_list()
+        self._update_undo_redo_buttons()
 
     def _refresh_list(self) -> None:
         self.plan_list.clear()
@@ -386,6 +450,7 @@ class PlanTab(QWidget):
         if len(new_order) == len(self.plan_data):
             for step in new_order:
                 step.pop("_moved", None)
+            self._snapshot()
             self.plan_data = new_order
             self.save_plan_silently()
         else:
@@ -465,6 +530,7 @@ class PlanTab(QWidget):
         self.status_label.setText(f"{msg} ({percent}%)")
 
     def _on_gen_plan_done(self, plan: list) -> None:
+        self._snapshot()
         self.plan_data = plan
         self.save_plan_silently()
         self._refresh_list()
@@ -495,6 +561,8 @@ class PlanTab(QWidget):
             return
         if not _show_yes_no(self, "Удалить", "Точно удалить этот шаг?"):
             return
+        self._snapshot()
+        self._save_timer.stop()
         self.plan_data.pop(self._current_index)
         self._current_index = -1
         self.save_plan_silently()
@@ -582,6 +650,7 @@ class PlanTab(QWidget):
                 idx = i
                 break
         if idx >= 0:
+            self._snapshot()
             self.plan_data[idx] = step
             self.save_plan_silently()
             self._refresh_list()
@@ -602,6 +671,7 @@ class PlanTab(QWidget):
                 idx = i
                 break
         if idx >= 0:
+            self._snapshot()
             self.plan_data[idx]["status"] = "failed"
             self.plan_data[idx]["report"] = f"Ошибка: {msg}"
             self.save_plan_silently()
