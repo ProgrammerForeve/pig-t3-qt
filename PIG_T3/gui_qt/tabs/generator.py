@@ -47,6 +47,7 @@ from ..dialogs.optimize_dialog import OptimizeDialog
 from ..models.project_tree import ProjectTreeModel
 from ..widgets.project_tree_view import ProjectTreeView
 from ..workers.generate_worker import GenerateWorker
+from ..workers.llm_wrappers import make_llm_client
 from ..workers.optimize_worker import OptimizeWorker
 
 _RECENT_PROJECTS_LIMIT = 10
@@ -342,6 +343,7 @@ class GeneratorTab(QWidget):
             self.status_label.setText("❌ Папка проекта не существует")
             return
 
+        llm_client = make_llm_client(model, self, self.settings)
         self._opt_worker = OptimizeWorker(
             root_folder=root,
             task=task,
@@ -351,6 +353,7 @@ class GeneratorTab(QWidget):
             greedy_pr_weight=float(self.settings.get("opt_greedy_pr_weight", 0.3)),
             greedy_cc_weight=float(self.settings.get("opt_greedy_cc_weight", 0.1)),
             token_bytes_per_token=int(self.settings.get("opt_token_bytes_per_token", 4)),
+            llm_client=llm_client,
         )
         # model используется воркером с llm_client=None — offline.
         # LLM-обёртка — T-111.
