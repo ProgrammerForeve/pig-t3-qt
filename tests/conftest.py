@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+import os as _os
+
+# Linux CI / headless: force offscreen QPA.
+# Without this, QApplication([]) in pytest-qt's `qapp` fixture tries
+# to init the xcb plugin (no DISPLAY), fails, falls back to offscreen
+# with a half-loaded GL stack, and SIGABRTs mid-suite — before
+# pytest_sessionfinish. Local dev with DISPLAY keeps xcb.
+if not _os.environ.get("DISPLAY") and not _os.environ.get("QT_QPA_PLATFORM"):
+    _os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
 import pytest
 
 

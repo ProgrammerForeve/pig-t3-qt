@@ -37,6 +37,16 @@ def run_worker_and_wait(
     with qtbot.waitSignal(done_signal, timeout=timeout) as blocker:
         thread.start()
 
+    # Detach worker from the thread BEFORE managed_thread stops it.
+    # Without this, worker keeps affinity to a dead QThread; when
+    # Python GC later calls its C++ destructor from the main thread,
+    # QObject::thread() returns a dangling pointer -> UB (SIGABRT on
+    # some Qt builds, notably CI with offscreen).
+    import contextlib
+
+    with contextlib.suppress(RuntimeError):
+        worker.moveToThread(QThread.currentThread())
+
     return list(blocker.args)
 
 

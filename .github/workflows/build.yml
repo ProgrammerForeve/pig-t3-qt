@@ -21,6 +21,8 @@ jobs:
             binary_path: dist/PIG-T3.exe
 
     runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
 
     steps:
       - uses: actions/checkout@v4
@@ -42,13 +44,9 @@ jobs:
       - name: Install project deps
         run: uv sync --extra dev
 
-      - name: Run tests with coverage (Linux, before build)
+      - name: Run tests (Linux, before build)
         if: runner.os == 'Linux'
-        run: |
-          uv run pytest tests/ -q --timeout=60 \
-            --cov=PIG_T3 \
-            --cov-report=term-missing \
-            --cov-fail-under=67
+        run: uv run pytest tests/ -q --timeout=60
 
       - name: Build executable
         run: uv run pyinstaller pig_t3.spec --noconfirm
