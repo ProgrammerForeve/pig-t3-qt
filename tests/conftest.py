@@ -68,3 +68,18 @@ def pytest_sessionfinish(session, exitstatus):
     import gc
 
     gc.freeze()
+
+
+@pytest.fixture(autouse=True)
+def _silence_dialogs(monkeypatch):
+    """Не даём модальным диалогам блокировать прогон тестов.
+
+    Патчим module-level обёртки в PIG_T3.gui_qt.tabs.generator, а НЕ
+    QMessageBox.information / .critical напрямую: monkeypatch на
+    статических методах shiboken-классов рассинхронизирует внутренние
+    кэши PySide6 и приводит к heap corruption (free(): invalid size).
+    """
+    from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    monkeypatch.setattr(gen_module, "_show_info_dialog", lambda *a, **kw: None)
+    monkeypatch.setattr(gen_module, "_show_critical_dialog", lambda *a, **kw: None)

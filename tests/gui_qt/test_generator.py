@@ -594,3 +594,136 @@ def test_generate_button_label_changes_during_run(settings, qtbot, monkeypatch, 
         pass
     qtbot.waitUntil(lambda: tab._gen_thread is None, timeout=3000)
     assert tab.btn_generate.text() == initial_text
+
+
+# ---------- T-108: диалоги успеха/ошибки + auto-copy ----------
+
+
+def _make_tab_with_fake_copy(settings, qtbot, monkeypatch, copy_returns=True):
+    """Хелпер: GeneratorTab с подменённой функцией копирования в буфер."""
+    from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    copied: list[str] = []
+
+    def _fake_copy(path):
+        copied.append(path)
+        return copy_returns
+
+    monkeypatch.setattr(gen_module, "copy_file_to_clipboard_windows", _fake_copy)
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    return tab, copied
+
+
+def _make_tab_capturing_dialogs(settings, qtbot, monkeypatch):
+    """Хелпер: GeneratorTab с перехватом вызовов обёрток диалогов."""
+    from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    info: list[str] = []
+    critical: list[str] = []
+    monkeypatch.setattr(
+        gen_module,
+        "_show_info_dialog",
+        lambda parent, title, text: info.append(text),
+    )
+    monkeypatch.setattr(
+        gen_module,
+        "_show_critical_dialog",
+        lambda parent, title, text: critical.append(text),
+    )
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    return tab, info, critical
+
+
+def test_success_dialog_shown_with_stats(qtbot, tmp_path, monkeypatch):
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+    }
+    tab, info, _critical = _make_tab_capturing_dialogs(settings, qtbot, monkeypatch)
+    tab._on_generation_finished("/tmp/out.txt", 3, 1200, 45678)
+    assert info, "info dialog не показан"
+    text = info[0]
+    assert "/tmp/out.txt" in text
+    assert "Файлов: 3" in text
+    assert "1.2K" in text  # 1200 → 1.2K
+    assert "45.68K" in text  # 45678 → 45.68K
+
+
+def test_error_dialog_shown(qtbot, tmp_path, monkeypatch):
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+    }
+    tab, _info, critical = _make_tab_capturing_dialogs(settings, qtbot, monkeypatch)
+    tab._on_generation_error("boom")
+    assert critical
+    assert "boom" in critical[0]
+
+
+def test_cancel_no_dialog(qtbot, tmp_path, monkeypatch):
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+    }
+    tab, info, critical = _make_tab_capturing_dialogs(settings, qtbot, monkeypatch)
+    tab._on_generation_cancelled()
+    assert not info
+    assert not critical
+
+
+def test_auto_copy_invokes_clipboard(qtbot, tmp_path, monkeypatch):
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+        "auto_copy_file": True,
+    }
+    tab, copied = _make_tab_with_fake_copy(settings, qtbot, monkeypatch, copy_returns=True)
+    tab._on_generation_finished("/tmp/out.txt", 1, 10, 100)
+    assert copied == ["/tmp/out.txt"]
+
+
+def test_auto_copy_skipped_when_disabled(qtbot, tmp_path, monkeypatch):
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+        "auto_copy_file": False,
+    }
+    tab, copied = _make_tab_with_fake_copy(settings, qtbot, monkeypatch)
+    tab._on_generation_finished("/tmp/out.txt", 1, 10, 100)
+    assert copied == []
+
+
+def test_auto_copy_failure_shown_in_dialog(qtbot, tmp_path, monkeypatch):
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+        "auto_copy_file": True,
+    }
+    from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    monkeypatch.setattr(gen_module, "copy_file_to_clipboard_windows", lambda p: False)
+    info: list[str] = []
+    monkeypatch.setattr(
+        gen_module,
+        "_show_info_dialog",
+        lambda parent, title, text: info.append(text),
+    )
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab._on_generation_finished("/tmp/out.txt", 1, 10, 100)
+    assert info
+    assert "⚠️" in info[0]

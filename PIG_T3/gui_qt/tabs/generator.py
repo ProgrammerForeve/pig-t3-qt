@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QToolButton,
@@ -41,12 +42,31 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.analyzer import ProjectAnalyzer
+from ...utils.clipboard import copy_file_to_clipboard_windows
 from ..models.project_tree import ProjectTreeModel
 from ..widgets.project_tree_view import ProjectTreeView
-from ..workers.generate_worker import GenerateWorker
 
 _RECENT_PROJECTS_LIMIT = 10
 _TREE_REFRESH_DELAY_MS = 600
+
+
+def _show_info_dialog(parent, title: str, text: str) -> None:
+    """Обёртка над QMessageBox.information.
+
+    Вынесена на уровень модуля, чтобы тесты могли подменить её через
+    monkeypatch.setattr(generator_module, '_show_info_dialog', ...) без
+    патчинга shiboken-статик-метода QMessageBox (это ломает внутренние
+    кэши PySide6 и приводит к heap corruption).
+    """
+    QMessageBox.information(parent, title, text)
+
+
+def _show_critical_dialog(parent, title: str, text: str) -> None:
+    """Обёртка над QMessageBox.critical (см. _show_info_dialog)."""
+    QMessageBox.critical(parent, title, text)
+
+
+from ..workers.generate_worker import GenerateWorker
 
 
 class GeneratorTab(QWidget):
@@ -495,12 +515,16 @@ class GeneratorTab(QWidget):
             self.status_label.setText(f"Обработка: {current}")
 
     def _on_generation_finished(self, path, count, lines, chars) -> None:
-        self.status_label.setText(f"✅ Готово! Файлов: {count} | Строк: {lines} | Символов: {chars}")
+        lines_s = self._format_number(lines)
+        chars_s = self._format_number(chars)
+        self.status_label.setText(f"✅ Готово! Файлов: {count} | Строк: {lines_s} | Символов: {chars_s}")
+        self._show_success_dialog(path, count, lines, chars)
         self.generation_finished.emit(path, count, lines, chars)
         self._reset_generate_button()
 
     def _on_generation_error(self, msg: str) -> None:
         self.status_label.setText(f"❌ Ошибка: {msg}")
+        self._show_error_dialog(msg)
         self.generation_error.emit(msg)
         self._reset_generate_button()
 
@@ -508,6 +532,29 @@ class GeneratorTab(QWidget):
         self.status_label.setText("⏹ Генерация отменена")
         self.generation_cancelled.emit()
         self._reset_generate_button()
+
+    @staticmethod
+    def _format_number(n: int) -> str:
+        """1.2K / 45.68K / 3.4M — как в legacy GUI."""
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
+        if n >= 1_000:
+            return f"{n / 1_000:.2f}".rstrip("0").rstrip(".") + "K"
+        return str(n)
+
+    def _show_success_dialog(self, path: str, count: int, lines: int, chars: int) -> None:
+        lines_s = self._format_number(lines)
+        chars_s = self._format_number(chars)
+        msg = f"Отчет создан:\n{path}\n\nФайлов: {count}\nСтрок кода: {lines_s}\nСимволов: {chars_s}"
+        if self.cb_auto_copy.isChecked():
+            if copy_file_to_clipboard_windows(path):
+                msg += "\n\n📋 ФАЙЛ СКОПИРОВАН В БУФЕР!"
+            else:
+                msg += "\n\n⚠️ Не удалось скопировать файл в буфер."
+        _show_info_dialog(self, "Успех", msg)
+
+    def _show_error_dialog(self, msg: str) -> None:
+        _show_critical_dialog(self, "Ошибка", f"Что-то пошло не так:\n{msg}")
 
     def _reset_generate_button(self) -> None:
         self.btn_generate.setText("🚀 ГЕНЕРИРОВАТЬ КОНТЕКСТ")
