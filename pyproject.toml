@@ -54,8 +54,6 @@ packages = [
     "PIG_T3",
     "PIG_T3.core",
     "PIG_T3.core.quality",
-    "PIG_T3.gui",
-    "PIG_T3.gui.tabs",
     "PIG_T3.utils",
 ]
 include-package-data = true
