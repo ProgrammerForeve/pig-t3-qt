@@ -1,0 +1,103 @@
+"""Главное окно: QMainWindow + QTabWidget с 5 вкладками-заглушками."""
+
+from importlib import metadata
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QTabWidget,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..config import ConfigManager
+from .config_compat import save_migrated
+
+_TAB_KEYS = ["generator", "info", "editor", "plan", "quality"]
+
+_TAB_TITLES = {
+    "generator": "🏠 Генератор",
+    "info": "🎓 Инфо / JSON Specs",
+    "editor": "✏️ Редактор (JSON Patcher)",
+    "plan": "📝 План проекта",
+    "quality": "📊 Анализ кода",
+}
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, config: ConfigManager, settings: dict):
+        super().__init__()
+        self.config = config
+        self.settings = settings
+
+        self._setup_window()
+        self._setup_tabs()
+        self._setup_statusbar()
+
+    def _setup_window(self) -> None:
+        self.setWindowTitle("AI Context Generator & Patcher (PySide6)")
+        self.resize(1200, 950)
+        self.setMinimumSize(850, 680)
+
+    def _setup_tabs(self) -> None:
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.setCentralWidget(self.tabs)
+
+        self._tab_widgets: dict[str, QWidget] = {}
+        for key in _TAB_KEYS:
+            widget = self._make_placeholder(_TAB_TITLES[key])
+            self._tab_widgets[key] = widget
+            self.tabs.addTab(widget, _TAB_TITLES[key])
+
+        # Кнопка настроек в правом углу строки вкладок
+        self.btn_settings = QToolButton()
+        self.btn_settings.setText("⚙️")
+        self.btn_settings.setToolTip("Настройки (этап 7)")
+        self.btn_settings.setAutoRaise(True)
+        self.btn_settings.clicked.connect(self._open_settings)
+        self.tabs.setCornerWidget(self.btn_settings, Qt.Corner.TopRightCorner)
+
+        self._apply_tab_visibility()
+
+    def _make_placeholder(self, text: str) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        label = QLabel(f"{text}\n\n(этап 1 — заглушка)")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(label)
+        return widget
+
+    def _apply_tab_visibility(self) -> None:
+        vis = self.settings.get("tabs_visibility", {})
+        for i, key in enumerate(_TAB_KEYS):
+            self.tabs.setTabVisible(i, vis.get(key, True))
+
+    def _setup_statusbar(self) -> None:
+        self.status_var = QLabel("Готов к работе")
+        self.version_label = QLabel(self._get_version())
+        self.statusBar().addWidget(self.status_var, 1)
+        self.statusBar().addPermanentWidget(self.version_label)
+
+    def _get_version(self) -> str:
+        try:
+            return f"v{metadata.version('pig-t3')}"
+        except Exception:
+            return "v?.?.?"
+
+    def _open_settings(self) -> None:
+        QMessageBox.information(
+            self,
+            "Настройки",
+            "Диалог настроек будет реализован на этапе 7.",
+        )
+
+    def closeEvent(self, event) -> None:
+        try:
+            save_migrated(self.config, self.settings)
+        except Exception as e:
+            print(f"Ошибка сохранения настроек при выходе: {e}")
+        event.accept()
