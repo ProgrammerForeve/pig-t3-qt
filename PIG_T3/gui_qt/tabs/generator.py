@@ -46,6 +46,8 @@ from ...utils.clipboard import copy_file_to_clipboard_windows
 from ..dialogs.optimize_dialog import OptimizeDialog
 from ..models.project_tree import ProjectTreeModel
 from ..widgets.project_tree_view import ProjectTreeView
+from ..workers.generate_worker import GenerateWorker
+from ..workers.optimize_worker import OptimizeWorker
 
 _RECENT_PROJECTS_LIMIT = 10
 _TREE_REFRESH_DELAY_MS = 600
@@ -67,9 +69,6 @@ def _show_critical_dialog(parent, title: str, text: str) -> None:
     QMessageBox.critical(parent, title, text)
 
 
-from ..workers.generate_worker import GenerateWorker
-
-
 class GeneratorTab(QWidget):
     """Каркас вкладки «Генератор»."""
 
@@ -83,6 +82,10 @@ class GeneratorTab(QWidget):
         self.settings = settings
         self.analyzer = ProjectAnalyzer()
         self._last_root = None
+        self._gen_thread: QThread | None = None
+        self._gen_worker: GenerateWorker | None = None
+        self._opt_thread: QThread | None = None
+        self._opt_worker: OptimizeWorker | None = None
 
         self._gen_thread: QThread | None = None
         self._gen_worker: GenerateWorker | None = None
@@ -200,8 +203,24 @@ class GeneratorTab(QWidget):
         tree_header.addWidget(self.btn_refresh_tree)
         layout.addLayout(tree_header)
 
+        # Компактная высота строки из конфига (T-110 UI)
+        row_h = int(self.settings.get("tree_row_height") or 0)
+        if row_h > 0:
+            self.tree_view = ProjectTreeView()
+            self.tree_view.apply_row_height(row_h)
+        else:
+            self.tree_view = ProjectTreeView()
+
+        # Чекбокс «Весь проект» (T-110 UI)
+        select_row = QHBoxLayout()
+        self.cb_select_all = QCheckBox("🌐 Весь проект")
+        self.cb_select_all.setTristate(False)
+        self.cb_select_all.setCheckState(Qt.CheckState.Checked)
+        select_row.addWidget(self.cb_select_all)
+        select_row.addStretch(1)
+        layout.addLayout(select_row)
+
         self.tree_model = ProjectTreeModel("", [])
-        self.tree_view = ProjectTreeView()
         self.tree_view.setModel(self.tree_model)
         layout.addWidget(self.tree_view, 1)
 
@@ -252,6 +271,8 @@ class GeneratorTab(QWidget):
         self.btn_auto.clicked.connect(self.auto_set_folder)
         self.btn_refresh_tree.clicked.connect(self.refresh_tree)
         self.btn_optimize.clicked.connect(self.open_optimization_dialog)
+        self.cb_select_all.clicked.connect(self._on_select_all_clicked)
+        self.tree_model.checkStateChanged.connect(self._sync_select_all_state)
 
         for edit in (self.path_edit, self.ext_edit, self.ignore_edit, self.output_edit):
             edit.textChanged.connect(self._on_field_changed)
@@ -271,15 +292,18 @@ class GeneratorTab(QWidget):
         self.options_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
 
     def open_optimization_dialog(self) -> None:
-        """Открыть диалог оптимизации контекста.
-
-        T-109: только собирает параметры. Запуск воркера — T-110.
-        """
+        """Открыть диалог оптимизации контекста и запустить воркер."""
         total_tokens = self._estimate_total_tokens()
         dlg = OptimizeDialog(self.settings, total_tokens, parent=self)
         if dlg.exec() == OptimizeDialog.DialogCode.Accepted:
             self.settings.update(dlg.get_updated_settings())
             self.settings_changed.emit()
+            self._start_optimization(
+                dlg.get_task(),
+                dlg.get_limit_tokens(),
+                dlg.get_depth(),
+                dlg.get_model(),
+            )
 
     def _estimate_total_tokens(self) -> int:
         """Оценка размера контекста: сумма (размер .py / 4) по дереву.
@@ -290,6 +314,7 @@ class GeneratorTab(QWidget):
         total = 0
 
         def walk(index: QModelIndex) -> None:
+            nonlocal total
             if not index.isValid():
                 return
             if self.tree_model.is_dir(index):
@@ -306,6 +331,167 @@ class GeneratorTab(QWidget):
         for i in range(self.tree_model.rowCount(QModelIndex())):
             walk(self.tree_model.index(i, 0, QModelIndex()))
         return total or 1000
+
+    # ---------- Optimization worker (T-110) ----------
+
+    def _start_optimization(self, task: str, limit_tokens: int, depth: int, model: str) -> None:
+        if self._opt_thread is not None or self._gen_thread is not None:
+            return
+        root = self.path_edit.text().strip()
+        if not root or not os.path.isdir(root):
+            self.status_label.setText("❌ Папка проекта не существует")
+            return
+
+        self._opt_worker = OptimizeWorker(
+            root_folder=root,
+            task=task,
+            limit_tokens=limit_tokens,
+            bfs_depth=depth,
+            greedy_llm_weight=float(self.settings.get("opt_greedy_llm_weight", 0.6)),
+            greedy_pr_weight=float(self.settings.get("opt_greedy_pr_weight", 0.3)),
+            greedy_cc_weight=float(self.settings.get("opt_greedy_cc_weight", 0.1)),
+            token_bytes_per_token=int(self.settings.get("opt_token_bytes_per_token", 4)),
+        )
+        # model используется воркером с llm_client=None — offline.
+        # LLM-обёртка — T-111.
+
+        self._opt_thread = QThread(self)
+        self._opt_worker.moveToThread(self._opt_thread)
+        self._opt_thread.started.connect(self._opt_worker.run)
+        self._opt_worker.progress.connect(self._on_optimization_progress)
+        self._opt_worker.done.connect(self._on_optimization_done)
+        self._opt_worker.error.connect(self._on_optimization_error)
+        self._opt_worker.cancelled.connect(self._on_optimization_cancelled)
+        for sig in (
+            self._opt_worker.done,
+            self._opt_worker.error,
+            self._opt_worker.cancelled,
+        ):
+            sig.connect(self._cleanup_optimization_thread)
+
+        self.btn_optimize.setEnabled(False)
+        self.btn_generate.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Оптимизация: запуск...")
+        self._opt_thread.start()
+
+    def _on_optimization_progress(self, percent: int, msg: str) -> None:
+        self.progress_bar.setValue(percent)
+        self.status_label.setText(f"Оптимизация: {msg} ({percent}%)")
+
+    def _on_optimization_done(self, selected_abs_paths: list) -> None:
+        try:
+            root = self.tree_model.root_path
+            if not root:
+                self.status_label.setText("⚠️ Оптимизация: дерево не загружено")
+                return
+            selected_rel = {os.path.relpath(p, root).replace("\\", "/") for p in selected_abs_paths}
+            all_files = self._all_file_paths()
+            unchecked_rel = [
+                os.path.relpath(f, root).replace("\\", "/")
+                for f in all_files
+                if os.path.relpath(f, root).replace("\\", "/") not in selected_rel
+            ]
+            self.tree_model.set_unchecked_paths(unchecked_rel)
+            self.status_label.setText(f"✅ Оптимизация завершена. Выбрано файлов: {len(selected_rel)}")
+        except Exception as e:
+            print(f"Error applying optimization: {e}")
+            self.status_label.setText(f"⚠️ Ошибка применения: {e}")
+
+    def _on_optimization_error(self, msg: str) -> None:
+        self.status_label.setText(f"❌ Ошибка оптимизации: {msg}")
+
+    def _on_optimization_cancelled(self) -> None:
+        self.status_label.setText("⏹ Оптимизация отменена")
+
+    def _cleanup_optimization_thread(self, *_args) -> None:
+        thread = self._opt_thread
+        worker = self._opt_worker
+        self._opt_thread = None
+        self._opt_worker = None
+        if thread is not None:
+            try:
+                thread.quit()
+                if not thread.wait(3000):
+                    thread.terminate()
+                    thread.wait(1000)
+            except RuntimeError as e:
+                print(f"opt thread cleanup: {e}")
+        self._detach_worker_from_thread(worker)
+        self.progress_bar.setVisible(False)
+        self.btn_optimize.setEnabled(True)
+        self.btn_generate.setEnabled(True)
+
+    def stop_optimization(self) -> None:
+        """Остановить воркер оптимизации (для MainWindow.closeEvent)."""
+        thread = self._opt_thread
+        worker = self._opt_worker
+        self._opt_thread = None
+        self._opt_worker = None
+        if thread is not None:
+            try:
+                thread.requestInterruption()
+                thread.quit()
+                if not thread.wait(3000):
+                    thread.terminate()
+                    thread.wait(1000)
+            except RuntimeError:
+                pass
+        self._detach_worker_from_thread(worker)
+
+    def _on_select_all_clicked(self, checked: bool) -> None:
+        self.tree_model.set_all_checked(checked)
+        self._sync_select_all_state()
+
+    def _sync_select_all_state(self) -> None:
+        all_files = self._all_file_paths()
+        if not all_files:
+            self.cb_select_all.setCheckState(Qt.CheckState.Checked)
+            return
+        checked_count = len(self.tree_model.checked_files())
+        if checked_count == len(all_files):
+            self.cb_select_all.setCheckState(Qt.CheckState.Checked)
+        elif checked_count == 0:
+            self.cb_select_all.setCheckState(Qt.CheckState.Unchecked)
+        else:
+            self.cb_select_all.setCheckState(Qt.CheckState.PartiallyChecked)
+
+    @staticmethod
+    def _detach_worker_from_thread(worker) -> None:
+        """Вернуть worker в main-thread перед удалением.
+
+        QObject с affinity на уже остановленный QThread нельзя удалять
+        из main-thread — shiboken вызовет C++ деструктор из чужого
+        потока, QObject::thread() вернёт мёртвый указатель → UB
+        (SIGSEGV). moveToThread(current) сначала перемещает affinity
+        обратно, потом GC безопасно собирает объект в main-thread.
+        """
+        if worker is None:
+            return
+        # C++ объект мог быть уже уничтожен — тогда moveToThread
+        # бросит RuntimeError/AttributeError; это ожидаемо.
+        with contextlib.suppress(RuntimeError, AttributeError):
+            worker.moveToThread(QThread.currentThread())
+
+    def _all_file_paths(self) -> list[str]:
+        result: list[str] = []
+        root = self.tree_model.root_path
+
+        def walk(index: QModelIndex) -> None:
+            if not index.isValid():
+                return
+            if self.tree_model.is_dir(index):
+                for i in range(self.tree_model.rowCount(index)):
+                    walk(self.tree_model.index(i, 0, index))
+            else:
+                rel = self.tree_model.relative_path(index)
+                result.append(os.path.join(root, rel))
+
+        for i in range(self.tree_model.rowCount(QModelIndex())):
+            walk(self.tree_model.index(i, 0, QModelIndex()))
+        return result
 
     # ---------- Public ----------
 
@@ -397,6 +583,7 @@ class GeneratorTab(QWidget):
             self.tree_model.set_unchecked_paths(saved_unchecked)
         if saved_expanded:
             self._schedule_expanded_restore(saved_expanded)
+        self._sync_select_all_state()
 
     def set_tree_data(self, files: list[tuple[str, str]]) -> None:
         """Пересобрать дерево из явного списка (для тестов/внешних вызовов)."""
@@ -477,9 +664,7 @@ class GeneratorTab(QWidget):
                     thread.wait(1000)
             except RuntimeError:
                 pass
-        if worker is not None:
-            with contextlib.suppress(RuntimeError):
-                worker.deleteLater()
+        self._detach_worker_from_thread(worker)
 
     def _on_generate_clicked(self) -> None:
         if self._gen_thread is not None:
@@ -603,9 +788,6 @@ class GeneratorTab(QWidget):
         self.progress_bar.setVisible(False)
 
     def _cleanup_generation_thread(self, *_args) -> None:
-        # Обнуляем ссылки ДО wait/deleteLater: если wait() крутит event
-        # loop и сработает ещё один сигнал finished/cancelled, повторный
-        # вход увидит None и не сделает double-delete.
         thread = self._gen_thread
         worker = self._gen_worker
         self._gen_thread = None
@@ -617,14 +799,12 @@ class GeneratorTab(QWidget):
                     thread.terminate()
                     thread.wait(1000)
             except RuntimeError as e:
-                # QThread wrapper might already be gone — не фатально.
                 print(f"thread cleanup: {e}")
-            # НЕ deleteLater: thread — child of GeneratorTab. Пусть
-            # родитель удалит его при своём teardown; ручной
-            # deleteLater() гоняется с qtbot.addWidget cleanup и даёт
-            # 'QThread: Destroyed while running'.
-        if worker is not None:
-            worker.deleteLater()
+        # Вернуть worker в main-thread до того, как Python GC его
+        # соберёт. moveToThread(dead_thread) делает affinity
+        # невалидной; QObject::~QObject из main-thread на объекте с
+        # мёртвой affinity — UB (SIGSEGV).
+        self._detach_worker_from_thread(worker)
 
     # ---------- Handlers ----------
 

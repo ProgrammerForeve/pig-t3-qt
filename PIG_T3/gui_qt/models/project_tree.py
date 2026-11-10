@@ -338,6 +338,13 @@ class ProjectTreeModel(QAbstractItemModel):
         self._recompute_all(self._root)
         self._notify_all()
 
+    def set_all_checked(self, checked: bool) -> None:
+        """Установить всем узлам Checked (checked=True) или Unchecked."""
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self._set_subtree_state(self._root, state)
+        self._notify_all()
+        self.checkStateChanged.emit()
+
     def reset_data(self, files: list[tuple[str, str]], root_path: str) -> None:
         """Полностью пересобрать дерево (чекбоксы сбрасываются в Checked)."""
         self.beginResetModel()

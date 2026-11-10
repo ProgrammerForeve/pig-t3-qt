@@ -6,6 +6,15 @@ from PySide6.QtWidgets import QDialog
 from PIG_T3.gui_qt.dialogs import optimize_dialog as od_module
 from PIG_T3.gui_qt.dialogs.optimize_dialog import OptimizeDialog
 
+
+@pytest.fixture(autouse=True)
+def _no_ollama(monkeypatch):
+    """Не дёргаем Ollama в тестах диалога — заглушка _default_models."""
+    from PIG_T3.gui_qt.dialogs import optimize_dialog as od_module
+
+    monkeypatch.setattr(od_module, "_default_models", lambda: ["None", "BomjAPI"])
+
+
 MODELS = ["None", "BomjAPI", "Web: Gemini", "qwen2.5-coder"]
 
 

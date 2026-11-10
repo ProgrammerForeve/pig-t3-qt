@@ -136,6 +136,8 @@ class MainWindow(QMainWindow):
                 # cleanup и дать qFatal abort.
                 if hasattr(generator, "stop_generation"):
                     generator.stop_generation()
+                if hasattr(generator, "stop_optimization"):
+                    generator.stop_optimization()
                 if hasattr(generator, "commit_recent_projects"):
                     generator.commit_recent_projects()
                 if hasattr(generator, "capture_tree_state"):

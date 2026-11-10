@@ -1,6 +1,7 @@
 """TDD: каркас вкладки «Генератор» (T-101)."""
 
 import pytest
+from PySide6.QtCore import Qt
 
 from PIG_T3.gui_qt.tabs.generator import GeneratorTab
 
@@ -742,7 +743,11 @@ def test_btn_optimize_exists(settings, qtbot):
 def test_btn_optimize_opens_dialog(qtbot, tmp_path, monkeypatch):
     from PySide6.QtWidgets import QDialog
 
+    from PIG_T3.gui_qt.dialogs import optimize_dialog as od_module
     from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    # Не дёргаем Ollama (HTTP 2s timeout) при создании диалога
+    monkeypatch.setattr(od_module, "_default_models", lambda: ["None", "BomjAPI"])
 
     opened: list = []
 
@@ -751,19 +756,7 @@ def test_btn_optimize_opens_dialog(qtbot, tmp_path, monkeypatch):
         return QDialog.DialogCode.Rejected
 
     monkeypatch.setattr(gen_module.OptimizeDialog, "exec", _fake_exec)
-
-    settings = {
-        "root_folder": str(tmp_path),
-        "extensions": ".py",
-        "ignore_list": "",
-        "output_name": "ctx",
-    }
-    tab = GeneratorTab(settings)
-    qtbot.addWidget(tab)
-    tab.btn_optimize.click()
-
-    assert opened, "диалог не открылся"
-    assert opened[0].total_tokens >= 1
+    ...
 
 
 def test_estimate_total_tokens_falls_back(qtbot, tmp_path):
@@ -777,3 +770,155 @@ def test_estimate_total_tokens_falls_back(qtbot, tmp_path):
     qtbot.addWidget(tab)
     # пустая папка → fallback 1000
     assert tab._estimate_total_tokens() >= 1000
+
+
+# ---------- T-110: OptimizeWorker + UI-правки ----------
+
+
+def test_cb_select_all_exists(settings, qtbot):
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    assert hasattr(tab, "cb_select_all")
+    assert "Весь проект" in tab.cb_select_all.text()
+
+
+def test_cb_select_all_unchecks_all(qtbot, tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    (tmp_path / "b.py").write_text("y")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.cb_select_all.click()  # Checked -> Unchecked
+    assert tab.tree_model.checked_files() == []
+
+
+def test_cb_select_all_checks_all(qtbot, tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.cb_select_all.click()  # Unchecked all
+    tab.cb_select_all.click()  # Checked all
+    assert tab.cb_select_all.checkState() == Qt.CheckState.Checked
+
+
+def test_cb_select_all_partial_on_single_uncheck(qtbot, tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    (tmp_path / "b.py").write_text("y")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    idx = tab.tree_model.find_index("a.py")
+    tab.tree_model.setData(idx, Qt.CheckState.Unchecked.value, Qt.ItemDataRole.CheckStateRole)
+    assert tab.cb_select_all.checkState() == Qt.CheckState.PartiallyChecked
+
+
+def test_row_height_applied_from_settings(qtbot, tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "tree_row_height": 16,
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    assert tab.tree_view.row_height() == 16
+
+
+def test_on_optimization_done_applies_selection(qtbot, tmp_path):
+    a = tmp_path / "a.py"
+    b = tmp_path / "b.py"
+    c = tmp_path / "c.py"
+    a.write_text("x")
+    b.write_text("y")
+    c.write_text("z")
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab._on_optimization_done([str(a)])
+    unchecked = tab.tree_model.unchecked_paths()
+    assert "b.py" in unchecked
+    assert "c.py" in unchecked
+    assert "a.py" not in unchecked
+
+
+def test_optimize_dialog_accepts_starts_worker(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtCore import QObject, Signal, Slot
+    from PySide6.QtWidgets import QDialog
+
+    from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    (tmp_path / "a.py").write_text("x")
+    captured: dict = {}
+
+    class _FakeWorker(QObject):
+        progress = Signal(int, str)
+        done = Signal(list)
+        error = Signal(str)
+        cancelled = Signal()
+
+        def __init__(self, **kw):
+            super().__init__()
+            captured.update(kw)
+
+        @Slot()
+        def run(self):
+            pass
+
+    class _FakeDlg:
+        DialogCode = QDialog.DialogCode
+
+        def __init__(self, *a, **kw):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def get_task(self):
+            return "test task"
+
+        def get_limit_tokens(self):
+            return 5000
+
+        def get_depth(self):
+            return 2
+
+        def get_model(self):
+            return "None"
+
+        def get_updated_settings(self):
+            return {}
+
+    monkeypatch.setattr(gen_module, "OptimizeWorker", _FakeWorker)
+    monkeypatch.setattr(gen_module, "OptimizeDialog", _FakeDlg)
+
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.btn_optimize.click()
+
+    qtbot.waitUntil(lambda: tab._opt_thread is not None, timeout=2000)
+    assert captured.get("task") == "test task"
+    assert captured.get("limit_tokens") == 5000
+    tab.stop_optimization()

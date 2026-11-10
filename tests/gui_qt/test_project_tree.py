@@ -196,3 +196,22 @@ def test_tree_node_dataclass():
     node = TreeNode(name="x", path="/p/x", is_dir=False)
     assert node.children == []
     assert node.check_state == Qt.CheckState.Checked
+
+
+# ---------- T-110: set_all_checked ----------
+
+
+def test_set_all_checked_false(model):
+    model.set_all_checked(False)
+    assert model.checked_files() == []
+
+
+def test_set_all_checked_true(model):
+    model.set_all_checked(False)
+    model.set_all_checked(True)
+    assert len(model.checked_files()) == 4
+
+
+def test_set_all_checked_emits_signal(model, qtbot):
+    with qtbot.waitSignal(model.checkStateChanged, timeout=500):
+        model.set_all_checked(False)
