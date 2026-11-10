@@ -45,6 +45,7 @@ from ...core.analyzer import ProjectAnalyzer
 from ...utils.clipboard import copy_file_to_clipboard_windows
 from ..dialogs.optimize_dialog import OptimizeDialog
 from ..models.project_tree import ProjectTreeModel
+from ..widgets.file_watcher import FileWatcher
 from ..widgets.project_tree_view import ProjectTreeView
 from ..widgets.recent_menu import RecentProjectsMenu
 from ..workers.generate_worker import GenerateWorker
@@ -86,11 +87,11 @@ class GeneratorTab(QWidget):
         self._last_root = None
         self._gen_thread: QThread | None = None
         self._gen_worker: GenerateWorker | None = None
+        self._watcher = FileWatcher(debounce_ms=1500, parent=self)
+        self._watcher.changes_detected.connect(self._on_files_changed)
         self._opt_thread: QThread | None = None
         self._opt_worker: OptimizeWorker | None = None
 
-        self._gen_thread: QThread | None = None
-        self._gen_worker: GenerateWorker | None = None
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(_TREE_REFRESH_DELAY_MS)
@@ -599,7 +600,28 @@ class GeneratorTab(QWidget):
             self.tree_model.set_unchecked_paths(saved_unchecked)
         if saved_expanded:
             self._schedule_expanded_restore(saved_expanded)
-        self._sync_select_all_state()
+        self._update_watcher()
+
+    def _update_watcher(self) -> None:
+        """Запустить watcher на текущем root_folder, если auto_refresh on."""
+        if not self.settings.get("auto_refresh_tree", True):
+            if self._watcher.is_running():
+                self._watcher.stop()
+            return
+        target = self.tree_model.root_path
+        if not target:
+            return
+        if self._watcher.current_path() == target:
+            return  # уже следим за этой папкой
+        self._watcher.start(target)
+
+    def _on_files_changed(self) -> None:
+        """Debounced event от watcher — пересобрать дерево, если не заняты."""
+        if not self.settings.get("auto_refresh_tree", True):
+            return
+        if self._gen_thread is not None or self._opt_thread is not None:
+            return  # не мешаем активной операции
+        self.refresh_tree()
 
     def set_tree_data(self, files: list[tuple[str, str]]) -> None:
         """Пересобрать дерево из явного списка (для тестов/внешних вызовов)."""
@@ -848,3 +870,7 @@ class GeneratorTab(QWidget):
         else:
             parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         self.path_edit.setText(parent_dir)
+
+    def closeEvent(self, event) -> None:
+        self._watcher.stop()
+        super().closeEvent(event)

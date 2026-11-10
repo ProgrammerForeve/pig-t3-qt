@@ -132,6 +132,12 @@ class SettingsDialog(QDialog):
         opt_form.addRow("Байт на токен:", self.bytes_per_token_spin)
         layout.addWidget(opt_group)
 
+        behavior_group = QGroupBox("Поведение")
+        behavior_layout = QVBoxLayout(behavior_group)
+        self.auto_refresh_cb = QCheckBox("Авто-обновление дерева при изменении файлов")
+        behavior_layout.addWidget(self.auto_refresh_cb)
+        layout.addWidget(behavior_group)
+
         vis_group = QGroupBox("Отображение вкладок")
         vis_layout = QVBoxLayout(vis_group)
         self.vis_checks: dict[str, QCheckBox] = {
@@ -198,6 +204,7 @@ class SettingsDialog(QDialog):
         self.pr_weight_spin.setValue(float(s.get("opt_greedy_pr_weight", 0.3)))
         self.cc_weight_spin.setValue(float(s.get("opt_greedy_cc_weight", 0.1)))
         self.bytes_per_token_spin.setValue(int(s.get("opt_token_bytes_per_token", 4)))
+        self.auto_refresh_cb.setChecked(bool(s.get("auto_refresh_tree", True)))
 
         vis = s.get("tabs_visibility", {})
         for key, cb in self.vis_checks.items():
@@ -233,6 +240,7 @@ class SettingsDialog(QDialog):
         s["opt_greedy_pr_weight"] = self.pr_weight_spin.value()
         s["opt_greedy_cc_weight"] = self.cc_weight_spin.value()
         s["opt_token_bytes_per_token"] = self.bytes_per_token_spin.value()
+        s["auto_refresh_tree"] = self.auto_refresh_cb.isChecked()
 
         s["tabs_visibility"] = {key: cb.isChecked() for key, cb in self.vis_checks.items()}
 

@@ -63,6 +63,7 @@ class ConfigManager:
             "font_size": 10,
             "tree_row_height": 28,
             "checkbox_size": 14,
+            "auto_refresh_tree": True,
             "tabs_visibility": {"generator": True, "info": True, "editor": True, "plan": True, "quality": True},
             "recent_projects": [],
             "git_enabled": False,

@@ -22,6 +22,7 @@ def base_settings():
         "opt_token_bytes_per_token": 4,
         "tabs_visibility": {
             "generator": True,
+            "auto_refresh_tree": True,
             "info": True,
             "editor": True,
             "plan": True,
@@ -99,3 +100,12 @@ def test_bfs_and_weights_roundtrip(qtbot, base_settings):
     assert saved["opt_greedy_llm_weight"] == 0.5
     assert saved["opt_greedy_pr_weight"] == 0.4
     assert saved["opt_greedy_cc_weight"] == 0.1
+
+
+def test_auto_refresh_toggle(qtbot, base_settings):
+    dlg = SettingsDialog(base_settings)
+    qtbot.addWidget(dlg)
+    assert dlg.auto_refresh_cb.isChecked() is True
+    dlg.auto_refresh_cb.setChecked(False)
+    dlg._on_save()
+    assert dlg.get_updated_settings()["auto_refresh_tree"] is False

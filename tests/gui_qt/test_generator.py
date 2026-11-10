@@ -1012,3 +1012,106 @@ def test_commit_recent_updates_menu(qtbot, tmp_path):
         if a.text() and "Очистить" not in a.text() and "пусто" not in a.text().lower()
     ]
     assert real_paths[0] == str(d2)
+
+
+# ---------- B3: file watcher ----------
+
+
+def test_watcher_starts_on_refresh(qtbot, tmp_path, monkeypatch):
+    from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    started: list[str] = []
+
+    class _FakeWatcher:
+        changes_detected = type("S", (), {"connect": lambda *a, **kw: None})()
+
+        def __init__(self, *a, **kw):
+            pass
+
+        def start(self, path):
+            started.append(path)
+            return True
+
+        def stop(self):
+            pass
+
+        def is_running(self):
+            return False
+
+        def current_path(self):
+            return None
+
+    monkeypatch.setattr(gen_module, "FileWatcher", _FakeWatcher)
+    (tmp_path / "a.py").write_text("x")
+    tab = GeneratorTab(
+        {
+            "root_folder": str(tmp_path),
+            "extensions": ".py",
+            "ignore_list": "",
+            "auto_refresh_tree": True,
+        }
+    )
+    qtbot.addWidget(tab)
+    assert started
+
+
+def test_watcher_not_started_when_disabled(qtbot, tmp_path, monkeypatch):
+    from PIG_T3.gui_qt.tabs import generator as gen_module
+
+    started: list[str] = []
+
+    class _FakeWatcher:
+        changes_detected = type("S", (), {"connect": lambda *a, **kw: None})()
+
+        def __init__(self, *a, **kw):
+            pass
+
+        def start(self, path):
+            started.append(path)
+            return True
+
+        def stop(self):
+            pass
+
+        def is_running(self):
+            return False
+
+        def current_path(self):
+            return None
+
+    monkeypatch.setattr(gen_module, "FileWatcher", _FakeWatcher)
+    (tmp_path / "a.py").write_text("x")
+    tab = GeneratorTab(
+        {
+            "root_folder": str(tmp_path),
+            "extensions": ".py",
+            "ignore_list": "",
+            "auto_refresh_tree": False,
+        }
+    )
+    qtbot.addWidget(tab)
+    assert not started
+
+
+def test_on_files_changed_skipped_when_generating(qtbot, tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    tab = GeneratorTab(
+        {
+            "root_folder": str(tmp_path),
+            "extensions": ".py",
+            "ignore_list": "",
+            "auto_refresh_tree": True,
+        }
+    )
+    qtbot.addWidget(tab)
+
+    calls: list[int] = []
+    tab.refresh_tree = lambda: calls.append(1)
+    # симулируем «идёт генерация»
+    from PySide6.QtCore import QThread
+
+    tab._gen_thread = QThread()
+
+    tab._on_files_changed()
+    assert not calls
+    tab._gen_thread = None
