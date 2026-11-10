@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from importlib import metadata
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -119,6 +119,29 @@ class MainWindow(QMainWindow):
         self.version_label = QLabel(self._get_version())
         self.statusBar().addWidget(self.status_var, 1)
         self.statusBar().addPermanentWidget(self.version_label)
+
+        # Опрашиваем активную вкладку и показываем её локальный статус
+        # в глобальном QStatusBar. Простая pull-модель: ни одна вкладка
+        # не эмитит сигнал, достаточно прочитать widget.status_label.text().
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(300)
+        self._status_timer.timeout.connect(self._refresh_status_from_active_tab)
+        self._status_timer.start()
+
+        self.tabs.currentChanged.connect(
+            lambda _idx: self._refresh_status_from_active_tab()
+        )
+
+    def _refresh_status_from_active_tab(self) -> None:
+        idx = self.tabs.currentIndex()
+        if idx < 0 or idx >= len(_TAB_KEYS):
+            return
+        widget = self._tab_widgets.get(_TAB_KEYS[idx])
+        if widget is None:
+            return
+        label = getattr(widget, "status_label", None)
+        if label is not None:
+            self.status_var.setText(label.text())
 
     def _get_version(self) -> str:
         try:
