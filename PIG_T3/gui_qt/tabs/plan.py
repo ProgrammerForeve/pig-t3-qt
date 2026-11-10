@@ -1,0 +1,407 @@
+"""Вкладка «📝 План проекта» — каркас, load/save, редактирование, DnD.
+
+Задачи T-401..T-404. Генерация плана (T-405) и выполнение (T-406..T-409)
+реализуются в последующих коммитах.
+
+Публичный интерфейс:
+- ``PlanTab(settings)``
+- ``set_path(folder)`` — синхронизация из GeneratorTab
+- ``plan_data`` (list[dict]) — текущий план
+- ``load_plan()`` / ``save_plan_silently()``
+- ``stop_workers()`` — для MainWindow.closeEvent
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ...core.plan_validator import validate_plan
+
+_SAVE_DEBOUNCE_MS = 500
+
+
+def _show_warning(parent, title: str, text: str) -> None:
+    QMessageBox.warning(parent, title, text)
+
+
+def _show_error(parent, title: str, text: str) -> None:
+    QMessageBox.critical(parent, title, text)
+
+
+def _show_yes_no(parent, title: str, text: str) -> bool:
+    r = QMessageBox.question(
+        parent,
+        title,
+        text,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return r == QMessageBox.StandardButton.Yes
+
+
+class PlanTab(QWidget):
+    """Каркас вкладки «План проекта»."""
+
+    plan_changed = Signal()
+
+    def __init__(self, settings: dict, parent=None):
+        super().__init__(parent)
+        self.settings = dict(settings)
+        self._current_path: str = self.settings.get("root_folder", "")
+        self.plan_data: list[dict] = []
+        self._current_index: int = -1
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(_SAVE_DEBOUNCE_MS)
+        self._save_timer.timeout.connect(self._on_save_timer)
+
+        self._setup_ui()
+        self._connect_signals()
+
+    # ---------- UI ----------
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout.addWidget(splitter, 1)
+
+        # --- Левая панель: список шагов ---
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        top_btns = QHBoxLayout()
+        self.btn_refresh = QPushButton("🔄 Обновить")
+        self.btn_new_plan = QPushButton("✨ Новый План")
+        top_btns.addWidget(self.btn_refresh)
+        top_btns.addWidget(self.btn_new_plan)
+        left_layout.addLayout(top_btns)
+
+        self.plan_list = QListWidget()
+        self.plan_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.plan_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.plan_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        left_layout.addWidget(self.plan_list, 1)
+        splitter.addWidget(left)
+
+        # --- Правая панель: редактор шага ---
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        status_row = QHBoxLayout()
+        self.cb_completed = QCheckBox("✅ Шаг выполнен")
+        status_row.addWidget(self.cb_completed)
+        status_row.addStretch(1)
+        self.btn_delete_step = QPushButton("🗑️ Удалить шаг")
+        status_row.addWidget(self.btn_delete_step)
+        right_layout.addLayout(status_row)
+
+        right_layout.addWidget(QLabel("Название:"))
+        self.title_edit = QLineEdit()
+        right_layout.addWidget(self.title_edit)
+
+        right_layout.addWidget(QLabel("Описание (задача для ИИ):"))
+        self.desc_edit = QPlainTextEdit()
+        right_layout.addWidget(self.desc_edit, 1)
+
+        right_layout.addWidget(QLabel("Отчёт ИИ о выполнении:"))
+        self.report_edit = QPlainTextEdit()
+        self.report_edit.setMaximumHeight(120)
+        right_layout.addWidget(self.report_edit)
+
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([320, 700])
+
+        # --- Нижняя панель: выполнение ---
+        exec_group = QGroupBox("🤖 Выполнение")
+        exec_layout = QHBoxLayout(exec_group)
+
+        exec_layout.addWidget(QLabel("Модель:"))
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(["None", "BomjAPI", "Web: Gemini", "Web: DeepSeek"])
+        exec_layout.addWidget(self.model_combo)
+
+        self.cb_auto_apply = QCheckBox("Авто-применение")
+        exec_layout.addWidget(self.cb_auto_apply)
+
+        self.btn_exec_selected = QPushButton("🚀 ВЫПОЛНИТЬ ВЫБРАННЫЙ ШАГ")
+        self.btn_exec_full = QPushButton("▶️ ВЫПОЛНИТЬ ВЕСЬ ПЛАН")
+        self.btn_retry = QPushButton("🔄 Повторить шаг с ошибкой")
+        self.btn_retry.setEnabled(False)
+
+        exec_layout.addStretch(1)
+        exec_layout.addWidget(self.btn_retry)
+        exec_layout.addWidget(self.btn_exec_selected)
+        exec_layout.addWidget(self.btn_exec_full)
+        layout.addWidget(exec_group)
+
+        progress_row = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximumWidth(300)
+        self.progress_bar.setVisible(False)
+        self.status_label = QLabel("Готов")
+        progress_row.addWidget(self.progress_bar)
+        progress_row.addWidget(self.status_label, 1)
+        layout.addLayout(progress_row)
+
+        self._update_editor_enabled(False)
+
+    def _connect_signals(self) -> None:
+        self.btn_refresh.clicked.connect(self.load_plan)
+        self.btn_new_plan.clicked.connect(self._on_new_plan_clicked)
+        self.btn_delete_step.clicked.connect(self._on_delete_step)
+        self.plan_list.currentRowChanged.connect(self._on_step_selected)
+        self.plan_list.model().rowsMoved.connect(self._on_rows_moved)
+
+        self.title_edit.textChanged.connect(self._schedule_save)
+        self.desc_edit.textChanged.connect(self._schedule_save)
+        self.report_edit.textChanged.connect(self._schedule_save)
+        self.cb_completed.toggled.connect(self._on_completed_toggled)
+
+        # T-405..T-409 — заглушки на этом этапе
+        self.btn_exec_selected.clicked.connect(self._on_exec_selected_stub)
+        self.btn_exec_full.clicked.connect(self._on_exec_full_stub)
+        self.btn_retry.clicked.connect(self._on_exec_selected_stub)
+
+    # ---------- Public ----------
+
+    def set_path(self, folder: str) -> None:
+        self._current_path = folder or ""
+        self.load_plan()
+
+    def load_plan(self) -> None:
+        if not self._current_path or not os.path.isdir(self._current_path):
+            self.plan_data = []
+            self._refresh_list()
+            return
+        path = os.path.join(self._current_path, ".pig", "plan.json")
+        if not os.path.exists(path):
+            self.plan_data = []
+            self._refresh_list()
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                data = []
+        except Exception as e:
+            print(f"load_plan error: {e}")
+            data = []
+        self.plan_data = data
+        issues = validate_plan(self.plan_data)
+        if issues:
+            _show_warning(
+                self,
+                "Проблемы плана",
+                "Обнаружены проблемы:\n\n" + "\n".join(issues),
+            )
+        self._refresh_list()
+
+    def save_plan_silently(self) -> None:
+        if not self._current_path or not os.path.isdir(self._current_path):
+            return
+        plan_path = os.path.join(self._current_path, ".pig", "plan.json")
+        os.makedirs(os.path.dirname(plan_path), exist_ok=True)
+        try:
+            with open(plan_path, "w", encoding="utf-8") as f:
+                json.dump(self.plan_data, f, indent=4, ensure_ascii=False)
+            self.plan_changed.emit()
+        except Exception as e:
+            print(f"save_plan error: {e}")
+
+    def stop_workers(self) -> None:
+        """Заглушка для MainWindow.closeEvent (воркеры добавятся в T-406)."""
+        self._save_timer.stop()
+
+    # ---------- List rendering ----------
+
+    def _refresh_list(self) -> None:
+        self.plan_list.clear()
+        for step in self.plan_data:
+            mark = "✅" if step.get("completed") else "⬜"
+            status = step.get("status", "pending")
+            if status == "in_progress":
+                mark = "🔵"
+            elif status == "failed":
+                mark = "🔴"
+            title = step.get("title", "Без названия")
+            self.plan_list.addItem(QListWidgetItem(f"{mark} {title}"))
+        if self.plan_data:
+            self.plan_list.setCurrentRow(0)
+        else:
+            self._current_index = -1
+            self._clear_editor()
+            self._update_editor_enabled(False)
+
+    # ---------- Editor sync ----------
+
+    def _on_step_selected(self, row: int) -> None:
+        if row < 0 or row >= len(self.plan_data):
+            self._current_index = -1
+            self._clear_editor()
+            self._update_editor_enabled(False)
+            return
+        self._current_index = row
+        step = self.plan_data[row]
+        self._block_save_signals(True)
+        try:
+            self.title_edit.setText(step.get("title", ""))
+            self.desc_edit.setPlainText(step.get("description", ""))
+            self.report_edit.setPlainText(step.get("report", ""))
+            self.cb_completed.setChecked(bool(step.get("completed", False)))
+        finally:
+            self._block_save_signals(False)
+        self._update_editor_enabled(True)
+        self.btn_retry.setEnabled(step.get("status") == "failed")
+
+    def _clear_editor(self) -> None:
+        self._block_save_signals(True)
+        try:
+            self.title_edit.clear()
+            self.desc_edit.clear()
+            self.report_edit.clear()
+            self.cb_completed.setChecked(False)
+        finally:
+            self._block_save_signals(False)
+
+    def _block_save_signals(self, block: bool) -> None:
+        for w in (
+            self.title_edit,
+            self.desc_edit,
+            self.report_edit,
+            self.cb_completed,
+        ):
+            w.blockSignals(block)
+
+    def _update_editor_enabled(self, enabled: bool) -> None:
+        for w in (
+            self.title_edit,
+            self.desc_edit,
+            self.report_edit,
+            self.cb_completed,
+            self.btn_delete_step,
+        ):
+            w.setEnabled(enabled)
+
+    def _schedule_save(self) -> None:
+        if self._current_index < 0:
+            return
+        self._save_timer.start()
+
+    def _on_save_timer(self) -> None:
+        """Debounce сработал: скопировать поля в plan_data и записать файл."""
+        self._save_current_step()
+        self.save_plan_silently()
+
+    def _on_completed_toggled(self, checked: bool) -> None:
+        if self._current_index < 0:
+            return
+        step = self.plan_data[self._current_index]
+        step["completed"] = checked
+        if checked and step.get("status") in ("in_progress", "failed"):
+            step["status"] = "completed"
+        self._save_timer.start()
+
+    def _save_current_step(self) -> None:
+        if self._current_index < 0 or self._current_index >= len(self.plan_data):
+            return
+        step = self.plan_data[self._current_index]
+        step["title"] = self.title_edit.text()
+        step["description"] = self.desc_edit.toPlainText().strip()
+        step["report"] = self.report_edit.toPlainText().strip()
+        step["completed"] = self.cb_completed.isChecked()
+
+    # ---------- DnD ----------
+
+    def _on_rows_moved(self, *_args) -> None:
+        # Перестроить plan_data по текущему порядку в QListWidget
+        new_order: list[dict] = []
+        for i in range(self.plan_list.count()):
+            item = self.plan_list.item(i)
+            text = item.text() if item else ""
+            # найдём по совпадению title (порядок гарантирован)
+            for step in self.plan_data:
+                if not step.get("_moved"):
+                    display = f"{self._get_mark(step)} {step.get('title', '')}"
+                    if display == text:
+                        step["_moved"] = True
+                        new_order.append(step)
+                        break
+        # fallback — если что-то не совпало, оставить старый порядок
+        if len(new_order) == len(self.plan_data):
+            for step in new_order:
+                step.pop("_moved", None)
+            self.plan_data = new_order
+            self.save_plan_silently()
+        else:
+            for step in self.plan_data:
+                step.pop("_moved", None)
+
+    @staticmethod
+    def _get_mark(step: dict) -> str:
+        if step.get("status") == "in_progress":
+            return "🔵"
+        if step.get("status") == "failed":
+            return "🔴"
+        return "✅" if step.get("completed") else "⬜"
+
+    # ---------- Handlers ----------
+
+    def _on_new_plan_clicked(self) -> None:
+        # T-405 подменит на диалог с LLM
+        self._show_warning_stub(
+            "Генерация плана",
+            "Генерация плана будет реализована в T-405.",
+        )
+
+    def _on_delete_step(self) -> None:
+        if self._current_index < 0:
+            return
+        if not _show_yes_no(self, "Удалить", "Точно удалить этот шаг?"):
+            return
+        self.plan_data.pop(self._current_index)
+        self._current_index = -1
+        self.save_plan_silently()
+        self._refresh_list()
+
+    def _on_exec_selected_stub(self) -> None:
+        self._show_warning_stub(
+            "Выполнение",
+            "Выполнение шага будет реализовано в T-406.",
+        )
+
+    def _on_exec_full_stub(self) -> None:
+        self._show_warning_stub(
+            "Выполнение",
+            "Выполнение всего плана будет реализовано в T-407.",
+        )
+
+    @staticmethod
+    def _show_warning_stub(title: str, text: str) -> None:
+        # Отдельный метод — тесты подменяют его
+        QMessageBox.information(None, title, text)

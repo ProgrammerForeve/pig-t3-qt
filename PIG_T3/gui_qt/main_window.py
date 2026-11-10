@@ -24,6 +24,7 @@ from .dialogs.settings_dialog import SettingsDialog
 from .tabs.editor import EditorTab
 from .tabs.generator import GeneratorTab
 from .tabs.info import InfoTab
+from .tabs.plan import PlanTab
 from .tabs.quality import QualityTab
 
 _TAB_KEYS = ["generator", "info", "editor", "plan", "quality"]
@@ -83,8 +84,13 @@ class MainWindow(QMainWindow):
                 widget = EditorTab(self.settings)
             elif key == "quality":
                 widget = QualityTab()
+            elif key == "plan":
+                widget = PlanTab(self.settings)
             else:
                 widget = self._make_placeholder(_TAB_TITLES[key])
+
+            self._tab_widgets[key] = widget
+            self.tabs.addTab(widget, _TAB_TITLES[key])
 
         self.btn_settings = QToolButton()
         self.btn_settings.setText("⚙️")
@@ -152,19 +158,23 @@ class MainWindow(QMainWindow):
                 generator.tree_view.apply_row_height(h)
 
     def _on_generator_settings_changed(self) -> None:
-        """Синхронизирует поля вкладки «Генератор» в self.settings
-        и прокидывает путь в редактор / анализ кода."""
-        generator = self._tab_widgets.get("generator")
-        if generator is None:
-            return
-        self.settings.update(generator.collect_settings())
-        root = self.settings.get("root_folder", "")
-        editor = self._tab_widgets.get("editor")
-        if editor is not None and hasattr(editor, "set_path"):
-            editor.set_path(root)
-        quality = self._tab_widgets.get("quality")
-        if quality is not None and hasattr(quality, "set_path"):
-            quality.set_path(root)
+        """Синхронизирует поля Генератора в self.settings и прокидывает
+        root_folder в редактор / анализ / план."""
+        try:
+            generator = self._tab_widgets.get("generator")
+            if generator is None:
+                return
+            self.settings.update(generator.collect_settings())
+            root = self.settings.get("root_folder", "")
+            for key in ("editor", "quality", "plan"):
+                widget = self._tab_widgets.get(key)
+                if widget is not None and hasattr(widget, "set_path"):
+                    try:
+                        widget.set_path(root)
+                    except Exception as e:
+                        print(f"{key}.set_path error: {e}")
+        except Exception as e:
+            print(f"_on_generator_settings_changed error: {e}")
 
     def closeEvent(self, event) -> None:
         try:
@@ -183,6 +193,9 @@ class MainWindow(QMainWindow):
             quality = self._tab_widgets.get("quality")
             if quality is not None and hasattr(quality, "stop_scan"):
                 quality.stop_scan()
+            plan = self._tab_widgets.get("plan")
+            if plan is not None and hasattr(plan, "stop_workers"):
+                plan.stop_workers()
             if hasattr(generator, "commit_recent_projects"):
                 generator.commit_recent_projects()
             if hasattr(generator, "capture_tree_state"):

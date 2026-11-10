@@ -37,19 +37,19 @@ def managed_thread(qapp):
     # обходится через os._exit() в pytest_sessionfinish.
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_sessionfinish(session, exitstatus):
     """Форсированный чистый выход в обход Python shutdown.
 
-    gc.freeze() недостаточно: даже в permanent generation Python
-    делает Py_DECREF при очистке module-globals в момент shutdown.
-    Один DECREF на shiboken-wrapper (QApplication из pytest-qt,
-    QThread, QObject) вызывает C++-деструктор; порядок деструкторов
-    не согласован с Qt → heap corruption (free(): invalid size).
+    tryfirst=True — наш hook выполняется раньше pytest-qt's teardown
+    (который уничтожает QApplication и трогает shiboken-обёртки).
+    Без этого краш 'free(): invalid size' происходит ДО нашего
+    os._exit.
 
-    os._exit() завершает процесс сразу после тестов, минуя atexit,
-    финальный GC и shiboken cleanup. ОС освобождает память целиком.
-    Минусы: не срабатывают atexit-хуки, coverage-репортинг,
-    pytest-xdist может ругаться — приемлемо для CI.
+    os._exit() завершает процесс сразу: минует atexit, финальный GC
+    и shiboken cleanup. ОС освобождает память. Минусы: coverage
+    reporter может ругаться, atexit-хуки не срабатывают — приемлемо
+    для CI.
     """
     import contextlib
     import os

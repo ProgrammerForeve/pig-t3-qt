@@ -15,7 +15,8 @@ pytestmark = pytest.mark.threading
 
 
 def test_filter_paths_drops_nested(tmp_path):
-    assert _filter_paths(["a/b.py", "a/b/c.py", "c.py"]) == ["a/b.py", "c.py"]
+    # 'a/b' — папка, покрывает 'a/b/c.py'. 'c.py' — независимый файл.
+    assert _filter_paths(["a/b", "a/b/c.py", "c.py"]) == ["a/b", "c.py"]
 
 
 def test_filter_paths_drops_absolute():
