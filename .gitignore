@@ -12,3 +12,8 @@ dist/
 *.manifest
 *.spec.bak
 PKG-INFO
+
+# pytest-cov
+.coverage
+.coverage.*
+htmlcov/

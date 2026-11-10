@@ -39,18 +39,6 @@ def managed_thread(qapp):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionfinish(session, exitstatus):
-    """Форсированный чистый выход в обход Python shutdown.
-
-    tryfirst=True — наш hook выполняется раньше pytest-qt's teardown
-    (который уничтожает QApplication и трогает shiboken-обёртки).
-    Без этого краш 'free(): invalid size' происходит ДО нашего
-    os._exit.
-
-    os._exit() завершает процесс сразу: минует atexit, финальный GC
-    и shiboken cleanup. ОС освобождает память. Минусы: coverage
-    reporter может ругаться, atexit-хуки не срабатывают — приемлемо
-    для CI.
-    """
     import contextlib
     import os
     import sys
@@ -58,6 +46,13 @@ def pytest_sessionfinish(session, exitstatus):
     with contextlib.suppress(Exception):
         sys.stdout.flush()
         sys.stderr.flush()
+
+    # PIG_NO_EXIT=1 — диагностический режим: даём pytest нормально
+    # завершиться, чтобы pytest-cov успел напечатать отчёт. В обычном
+    # режиме os._exit() обходит Qt/shiboken shutdown (ADR-010).
+    if os.environ.get("PIG_NO_EXIT"):
+        return
+
     os._exit(int(exitstatus))
 
 
