@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from ...core.plan_validator import validate_plan
 from ..dialogs.new_plan_dialog import NewPlanDialog
 from ..workers.generate_plan_worker import GeneratePlanWorker
+from ..workers.plan_step_worker import PlanStepWorker
 
 _SAVE_DEBOUNCE_MS = 500
 
@@ -76,6 +77,8 @@ class PlanTab(QWidget):
         self._current_index: int = -1
         self._gen_plan_thread: QThread | None = None
         self._gen_plan_worker: GeneratePlanWorker | None = None
+        self._exec_thread: QThread | None = None
+        self._exec_worker: PlanStepWorker | None = None
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(_SAVE_DEBOUNCE_MS)
@@ -189,9 +192,9 @@ class PlanTab(QWidget):
         self.cb_completed.toggled.connect(self._on_completed_toggled)
 
         # T-405..T-409 — заглушки на этом этапе
-        self.btn_exec_selected.clicked.connect(self._on_exec_selected_stub)
-        self.btn_exec_full.clicked.connect(self._on_exec_full_stub)
-        self.btn_retry.clicked.connect(self._on_exec_selected_stub)
+        self.btn_exec_selected.clicked.connect(self._on_exec_selected_clicked)
+        self.btn_exec_full.clicked.connect(self._on_exec_full_stub)  # T-407
+        self.btn_retry.clicked.connect(self._on_retry_clicked)
 
     # ---------- Public ----------
 
@@ -241,14 +244,16 @@ class PlanTab(QWidget):
 
     def stop_workers(self) -> None:
         self._save_timer.stop()
-        thread = self._gen_plan_thread
-        self._gen_plan_thread = None
+        for attr in ("_gen_plan_thread", "_exec_thread"):
+            thread = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if thread is not None:
+                with contextlib.suppress(RuntimeError):
+                    thread.requestInterruption()
+                    thread.quit()
+                    thread.wait(3000)
         self._gen_plan_worker = None
-        if thread is not None:
-            with contextlib.suppress(RuntimeError):
-                thread.requestInterruption()
-                thread.quit()
-                thread.wait(3000)
+        self._exec_worker = None
 
     # ---------- List rendering ----------
 
@@ -482,11 +487,125 @@ class PlanTab(QWidget):
         self.save_plan_silently()
         self._refresh_list()
 
-    def _on_exec_selected_stub(self) -> None:
-        self._show_warning_stub(
-            "Выполнение",
-            "Выполнение шага будет реализовано в T-406.",
+    def _on_exec_selected_clicked(self) -> None:
+        if self._exec_thread is not None:
+            return
+        if self._current_index < 0 or self._current_index >= len(self.plan_data):
+            _show_warning(self, "Внимание", "Выберите шаг для выполнения.")
+            return
+        step = self.plan_data[self._current_index]
+        if step.get("completed") and not _show_yes_no(
+            self,
+            "Подтверждение",
+            "Этот шаг уже выполнен. Выполнить повторно?",
+        ):
+            return
+        model = self.model_combo.currentText()
+        if model in ("", "None"):
+            _show_warning(self, "Внимание", "Выберите модель LLM.")
+            return
+        if not self._current_path or not os.path.isdir(self._current_path):
+            _show_warning(self, "Ошибка", "Папка проекта не существует.")
+            return
+        self._start_exec_step(step, model)
+
+    def _on_retry_clicked(self) -> None:
+        self._on_exec_selected_clicked()
+
+    def _start_exec_step(self, step: dict, model_name: str) -> None:
+        self.btn_exec_selected.setEnabled(False)
+        self.btn_exec_full.setEnabled(False)
+        self.btn_retry.setEnabled(False)
+        self.btn_new_plan.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText(f"Выполнение шага: {step.get('title', '')}")
+
+        limit = int(self.settings.get("plan_step_limit_tokens", 15000))
+        self._exec_worker = PlanStepWorker(
+            step=step,
+            plan_data=self.plan_data,
+            root_folder=self._current_path,
+            model_name=model_name,
+            settings=self.settings,
+            limit_tokens=limit,
+            parent_widget=self,
         )
+        self._exec_thread = QThread(self)
+        self._exec_worker.moveToThread(self._exec_thread)
+        self._exec_thread.started.connect(self._exec_worker.run)
+        self._exec_worker.progress.connect(self._on_exec_progress)
+        self._exec_worker.done.connect(self._on_exec_done)
+        self._exec_worker.error.connect(self._on_exec_error)
+        self._exec_worker.cancelled.connect(self._on_exec_cancelled)
+        for sig in (
+            self._exec_worker.done,
+            self._exec_worker.error,
+            self._exec_worker.cancelled,
+        ):
+            sig.connect(self._cleanup_exec_thread)
+        self._exec_thread.start()
+
+    def _on_exec_progress(self, percent: int, msg: str) -> None:
+        self.progress_bar.setValue(percent)
+        self.status_label.setText(f"{msg} ({percent}%)")
+
+    def _on_exec_done(self, step: dict, log: str) -> None:
+        idx = -1
+        for i, s in enumerate(self.plan_data):
+            if s.get("id") == step.get("id"):
+                idx = i
+                break
+        if idx >= 0:
+            self.plan_data[idx] = step
+            self.save_plan_silently()
+            self._refresh_list()
+            self.plan_list.setCurrentRow(idx)
+        self.status_label.setText(f"✅ Шаг выполнен: {step.get('title', '')}")
+
+    def _on_exec_error(self, step: dict, msg: str) -> None:
+        idx = -1
+        for i, s in enumerate(self.plan_data):
+            if s.get("id") == step.get("id"):
+                idx = i
+                break
+        if idx >= 0:
+            self.plan_data[idx]["status"] = "failed"
+            self.plan_data[idx]["report"] = f"Ошибка: {msg}"
+            self.save_plan_silently()
+            self._refresh_list()
+        self.status_label.setText(f"❌ Ошибка: {msg}")
+        _show_error(self, "Ошибка выполнения", msg)
+
+    def _on_exec_cancelled(self) -> None:
+        self.status_label.setText("⏹ Выполнение отменено")
+
+    def _cleanup_exec_thread(self, *_args) -> None:
+        thread = self._exec_thread
+        worker = self._exec_worker
+        self._exec_thread = None
+        self._exec_worker = None
+        if thread is not None:
+            with contextlib.suppress(RuntimeError):
+                thread.quit()
+                thread.wait(3000)
+        self._detach_worker_from_thread(worker)
+        self.btn_exec_selected.setEnabled(True)
+        self.btn_exec_full.setEnabled(True)
+        self.btn_new_plan.setEnabled(True)
+        if 0 <= self._current_index < len(self.plan_data):
+            step = self.plan_data[self._current_index]
+            self.btn_retry.setEnabled(step.get("status") == "failed")
+        self.progress_bar.setVisible(False)
+
+    @staticmethod
+    def _detach_worker_from_thread(worker) -> None:
+        """Отвязать worker от мёртвого QThread перед GC (см. T-107)."""
+        if worker is None:
+            return
+        with contextlib.suppress(RuntimeError, AttributeError):
+            worker.moveToThread(QThread.currentThread())
 
     def _on_exec_full_stub(self) -> None:
         self._show_warning_stub(

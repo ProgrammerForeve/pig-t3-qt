@@ -10,6 +10,7 @@ from .llm_wrappers import (
     make_llm_client,
 )
 from .optimize_worker import OptimizeWorker
+from .plan_step_worker import PlanStepWorker
 from .quality_worker import ScanWorker
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "GenerateWorker",
     "OllamaWrapper",
     "OptimizeWorker",
+    "PlanStepWorker",
     "ScanWorker",
     "UndoRedoWorker",
     "WebWrapper",

@@ -209,3 +209,70 @@ def test_on_gen_plan_done_updates_plan(qtbot, pig_dir):
     tab._on_gen_plan_done(new_plan)
     assert tab.plan_data == new_plan
     assert tab.plan_list.count() == 1
+
+
+# ---------- T-406: выполнение шага ----------
+
+
+def test_on_exec_done_updates_plan(qtbot, write_plan, pig_dir):
+    tab = PlanTab({"root_folder": str(pig_dir)})
+    qtbot.addWidget(tab)
+    tab.load_plan()
+    updated = dict(tab.plan_data[0])
+    updated["status"] = "completed"
+    updated["completed"] = True
+    updated["report"] = "OK"
+    tab._on_exec_done(updated, "log")
+    written = json.loads((pig_dir / ".pig" / "plan.json").read_text())
+    assert written[0]["status"] == "completed"
+    assert written[0]["completed"] is True
+
+
+def test_on_exec_error_marks_failed(qtbot, write_plan, pig_dir):
+    tab = PlanTab({"root_folder": str(pig_dir)})
+    qtbot.addWidget(tab)
+    tab.load_plan()
+    step = dict(tab.plan_data[0])
+    tab._on_exec_error(step, "boom")
+    written = json.loads((pig_dir / ".pig" / "plan.json").read_text())
+    assert written[0]["status"] == "failed"
+    assert "boom" in written[0]["report"]
+
+
+def test_exec_selected_warns_without_model(qtbot, monkeypatch, write_plan, pig_dir):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    warns: list[str] = []
+    monkeypatch.setattr(
+        plan_module,
+        "_show_warning",
+        lambda parent, title, text: warns.append(text),
+    )
+    tab = PlanTab({"root_folder": str(pig_dir)})
+    qtbot.addWidget(tab)
+    tab.load_plan()
+    tab.plan_list.setCurrentRow(0)
+    tab.model_combo.setCurrentText("None")
+    tab._on_exec_selected_clicked()
+    assert warns
+    assert tab._exec_thread is None
+
+
+def test_exec_selected_warns_without_path(qtbot, monkeypatch):
+    from PIG_T3.gui_qt.tabs import plan as plan_module
+
+    warns: list[str] = []
+    monkeypatch.setattr(
+        plan_module,
+        "_show_warning",
+        lambda parent, title, text: warns.append(text),
+    )
+    tab = PlanTab({"root_folder": ""})
+    qtbot.addWidget(tab)
+    tab.plan_data = [{"id": "s1", "title": "T", "description": "d"}]
+    tab._refresh_list()
+    tab.plan_list.setCurrentRow(0)
+    tab.model_combo.setCurrentText("BomjAPI")
+    tab._on_exec_selected_clicked()
+    assert warns
+    assert tab._exec_thread is None
