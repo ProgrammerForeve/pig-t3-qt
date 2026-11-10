@@ -39,6 +39,7 @@ class OptimizeWorker(QObject):
         greedy_pr_weight: float = 0.3,
         greedy_cc_weight: float = 0.1,
         token_bytes_per_token: int = 4,
+        ignore_list: str = "",
         optimizer: ContextOptimizer | None = None,
         parent: QObject | None = None,
     ):
@@ -56,6 +57,7 @@ class OptimizeWorker(QObject):
                 greedy_pr_weight=greedy_pr_weight,
                 greedy_cc_weight=greedy_cc_weight,
                 token_bytes_per_token=token_bytes_per_token,
+                ignore_list=ignore_list,
             )
 
     def _is_interrupted(self) -> bool:

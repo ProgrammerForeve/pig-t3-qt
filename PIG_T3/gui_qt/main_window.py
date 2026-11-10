@@ -9,6 +9,7 @@ from __future__ import annotations
 from importlib import metadata
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -47,6 +48,7 @@ class MainWindow(QMainWindow):
         self._setup_window()
         self._setup_tabs()
         self._setup_statusbar()
+        self._setup_shortcuts()
 
     def _setup_window(self) -> None:
         self.setWindowTitle("AI Context Generator & Patcher (PySide6)")
@@ -146,6 +148,31 @@ class MainWindow(QMainWindow):
             return f"v{metadata.version('pig-t3')}"
         except Exception:
             return "v?.?.?"
+
+    def _setup_shortcuts(self) -> None:
+        """Глобальные горячие клавиши.
+
+        ADR-007 — только осмысленные QShortcut для действий приложения.
+        Ctrl+C/V/X/A/Z остаются нативными (QLineEdit и т.д.).
+        """
+        # Ctrl+1..5 — переключение вкладок
+        for i in range(len(_TAB_KEYS)):
+            sc = QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self)
+            sc.activated.connect(lambda idx=i: self.tabs.setCurrentIndex(idx))
+
+        # Ctrl+, — настройки (стандарт GNOME/macOS)
+        sc_settings = QShortcut(QKeySequence("Ctrl+,"), self)
+        sc_settings.activated.connect(self._open_settings)
+
+        # F5 — перейти на «Генератор» и обновить дерево
+        sc_refresh = QShortcut(QKeySequence("F5"), self)
+        sc_refresh.activated.connect(self._refresh_generator_tree)
+
+    def _refresh_generator_tree(self) -> None:
+        self.tabs.setCurrentIndex(_TAB_KEYS.index("generator"))
+        generator = self._tab_widgets.get("generator")
+        if generator is not None and hasattr(generator, "refresh_tree"):
+            generator.refresh_tree()
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self.settings, parent=self)

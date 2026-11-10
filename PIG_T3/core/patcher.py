@@ -4,6 +4,21 @@ import re
 
 import shutil
 
+def _safe_path(root_folder: str, rel_path: str) -> str | None:
+    """Резолвит rel_path внутри root_folder. None — если выход за пределы.
+
+    Защита от path traversal в ответе LLM (`../../etc/passwd`).
+    """
+    if not rel_path or not isinstance(rel_path, str):
+        return None
+    root_abs = os.path.abspath(root_folder)
+    target_abs = os.path.abspath(os.path.join(root_folder, rel_path))
+    if target_abs == root_abs:
+        return None  # сам корень, не файл
+    if not target_abs.startswith(root_abs + os.sep):
+        return None
+    return target_abs
+
 def clean_json_text(text):
     """
     Пытается очистить текст от Markdown оберток ```json ... ``` и найти валидный JSON список.
@@ -67,6 +82,11 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
             abs_path = os.path.join(root_folder, rel_path)
         # --- CREATE ---
         if action_type == 'create':
+            safe = _safe_path(root_folder, rel_path)
+            if safe is None:
+                changes_log.append(f"❌ Create: path outside root — {rel_path}")
+                continue
+            abs_path = safe
             content = action.get('content')
             if content is None:
                 changes_log.append(f"⚠️ Create: нет контента для {rel_path}")
@@ -83,6 +103,11 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
 
         # --- DELETE ---
         elif action_type == 'delete':
+            safe = _safe_path(root_folder, rel_path)
+            if safe is None:
+                changes_log.append(f"❌ Delete: path outside root — {rel_path}")
+                continue
+            abs_path = safe
             if os.path.exists(abs_path):
                 try:
                     if os.path.isdir(abs_path):
@@ -107,8 +132,14 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                 changes_log.append("⚠️ Move: пропущен source или destination.")
                 continue
 
-            abs_source = os.path.join(root_folder, source_rel)
-            abs_dest = os.path.join(root_folder, dest_rel)
+            abs_source = _safe_path(root_folder, source_rel)
+            abs_dest = _safe_path(root_folder, dest_rel)
+            if abs_source is None:
+                changes_log.append(f"❌ Move: source outside root — {source_rel}")
+                continue
+            if abs_dest is None:
+                changes_log.append(f"❌ Move: destination outside root — {dest_rel}")
+                continue
 
             if not os.path.exists(abs_source):
                 changes_log.append(f"❌ Move Error: исходный путь не найден {source_rel}")
@@ -217,6 +248,11 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                 changes_log.append("⚠️ План не найден в проекте.")
         # --- EDIT ---
         elif action_type == 'edit':
+            safe = _safe_path(root_folder, rel_path)
+            if safe is None:
+                changes_log.append(f"❌ Edit: path outside root — {rel_path}")
+                continue
+            abs_path = safe
             if not os.path.exists(abs_path):
                 changes_log.append(f"❌ Edit: файл не найден {rel_path}")
                 continue

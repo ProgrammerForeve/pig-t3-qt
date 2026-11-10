@@ -92,6 +92,7 @@ class GeneratePlanWorker(QObject):
                 llm_client=None,
                 bfs_depth=int(self._settings.get("opt_bfs_depth", 2)),
                 token_bytes_per_token=int(self._settings.get("opt_token_bytes_per_token", 4)),
+                ignore_list=self._settings.get("ignore_list", ""),
             )
             selected = opt.optimize()
         except Exception:

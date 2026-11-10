@@ -353,6 +353,7 @@ class GeneratorTab(QWidget):
             greedy_pr_weight=float(self.settings.get("opt_greedy_pr_weight", 0.3)),
             greedy_cc_weight=float(self.settings.get("opt_greedy_cc_weight", 0.1)),
             token_bytes_per_token=int(self.settings.get("opt_token_bytes_per_token", 4)),
+            ignore_list=self.ignore_edit.text(),
             llm_client=llm_client,
         )
         # model используется воркером с llm_client=None — offline.

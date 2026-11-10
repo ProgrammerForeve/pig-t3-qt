@@ -11,12 +11,13 @@ class ContextOptimizer:
     Сочетает статический анализ графа, BFS, LLM-ранжирование и усечение файлов.
     """
     def __init__(self, root_folder: str, task: str, limit_tokens: int,
-                 llm_client=None, cache_dir: Optional[str] = None,
-                 bfs_depth: int = 2,
-                 greedy_llm_weight: float = 0.6,
-                 greedy_pr_weight: float = 0.3,
-                 greedy_cc_weight: float = 0.1,
-                 token_bytes_per_token: int = 4):
+             llm_client=None, cache_dir: Optional[str] = None,
+             bfs_depth: int = 2,
+             greedy_llm_weight: float = 0.6,
+             greedy_pr_weight: float = 0.3,
+             greedy_cc_weight: float = 0.1,
+             token_bytes_per_token: int = 4,
+             ignore_list=None):
         self.root_folder = os.path.abspath(root_folder)
         self.task = task
         self.limit_tokens = limit_tokens
@@ -26,6 +27,13 @@ class ContextOptimizer:
         self.greedy_pr_weight = greedy_pr_weight
         self.greedy_cc_weight = greedy_cc_weight
         self.token_bytes_per_token = token_bytes_per_token
+        # Accept str or list; normalize to stripped list of substrings.
+        if isinstance(ignore_list, str):
+            self.ignore_list = [x.strip() for x in ignore_list.split(",") if x.strip()]
+        elif ignore_list:
+            self.ignore_list = [str(x).strip() for x in ignore_list if str(x).strip()]
+        else:
+            self.ignore_list = []
         self.cache_dir = cache_dir or os.path.join(self.root_folder, '.pig_cache')
         os.makedirs(self.cache_dir, exist_ok=True)
         self.dep_graph = DependencyGraph(root_folder)
@@ -141,13 +149,23 @@ class ContextOptimizer:
         return final_selection
 
     def _collect_python_files(self):
-        """Собирает все .py файлы в проекте (игнорируя стандартные исключения)."""
-        ignore_dirs = {'venv', '.venv', '__pycache__', '.git', '.idea', 'node_modules', 'build', 'dist'}
+        """Собирает все .py файлы, учитывая hardcoded + пользовательский ignore."""
+        ignore_dirs = {
+            'venv', '.venv', '__pycache__', '.git', '.idea',
+            'node_modules', 'build', 'dist',
+        }
         for root, dirs, files in os.walk(self.root_folder):
-            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+            dirs[:] = [
+                d for d in dirs
+                if d not in ignore_dirs
+                and not any(ign in d for ign in self.ignore_list)
+            ]
             for file in files:
-                if file.endswith('.py'):
-                    self.all_files.append(os.path.join(root, file))
+                if not file.endswith('.py'):
+                    continue
+                if any(ign in file for ign in self.ignore_list):
+                    continue
+                self.all_files.append(os.path.join(root, file))
 
     def _file_contains_keywords(self, file_path: str, keywords: List[str]) -> bool:
         try:
