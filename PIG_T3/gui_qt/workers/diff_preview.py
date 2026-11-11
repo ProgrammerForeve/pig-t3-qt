@@ -46,20 +46,26 @@ def _extract_paths(data: list[dict]) -> list[str]:
 
 
 def _filter_safe(paths: list[str], root_folder: str) -> list[str]:
-    """Только относительные пути, без .., без вложенных дублей."""
+    """Только относительные пути внутри root_folder, без .., без дублей.
+
+    Использует Path.relative_to() вместо str.startswith(str(root) + "/").
+    На Windows str(Path("C:\\\\root")) + "/" = "C:\\\\root/" (forward slash),
+    а str(candidate) = "C:\\\\root\\\\sub\\\\file.py" (backslash). startswith
+    не срабатывает → все пути отвергаются → diff всегда пустой.
+    relative_to() работает независимо от ОС и разделителя.
+    """
     root_abs = Path(root_folder).resolve()
     safe: list[str] = []
     for p in paths:
         try:
             candidate = (root_abs / p).resolve()
+            rel = candidate.relative_to(root_abs)
         except (OSError, ValueError):
             continue
-        if not str(candidate).startswith(str(root_abs) + "/"):
+        rel_str = str(rel).replace("\\", "/")
+        if not rel_str:
             continue
-        if candidate == root_abs:
-            continue
-        rel = str(candidate.relative_to(root_abs))
-        safe.append(rel)
+        safe.append(rel_str)
     safe.sort()
     deduped: list[str] = []
     for p in safe:
@@ -94,8 +100,11 @@ def compute_diffs(llm_text: str, root_folder: str) -> list[FileDiff]:
     if not isinstance(data, list):
         raise ValueError("Корень JSON должен быть списком [ ... ].")
 
-    paths = _filter_safe(_extract_paths(data), root_folder)
+    raw_paths = _extract_paths(data)
+    paths = _filter_safe(raw_paths, root_folder)
     if not paths:
+        if raw_paths:
+            raise ValueError(f"Все {len(raw_paths)} путей из JSON вне корня проекта {root_folder!r}: {raw_paths[:3]}")
         return []
 
     root = Path(root_folder).resolve()

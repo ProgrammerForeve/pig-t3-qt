@@ -59,8 +59,8 @@ def test_empty_patch(tmp_path):
 
 def test_path_traversal_rejected(tmp_path):
     llm = _actions({"action": "create", "path": "../escape.py", "content": "x\n"})
-    diffs = compute_diffs(llm, str(tmp_path))
-    assert diffs == []
+    with pytest.raises(ValueError, match="вне корня проекта"):
+        compute_diffs(llm, str(tmp_path))
 
 
 def test_non_list_json_raises(tmp_path):
@@ -78,3 +78,46 @@ def test_nested_path_diff(tmp_path):
     diffs = compute_diffs(llm, str(tmp_path))
     assert len(diffs) == 1
     assert diffs[0].path == "sub/dir/f.py"
+
+
+# ---------- _filter_safe (regression для Windows) ----------
+
+
+def test_filter_safe_accepts_valid_nested(tmp_path):
+    """Регрессия: на Windows старый str.startswith(str(root) + '/') отвергал
+    все пути, потому что Windows использует \\ как разделитель."""
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "a.py").write_text("x")
+    from PIG_T3.gui_qt.workers.diff_preview import _filter_safe
+
+    result = _filter_safe(["sub/a.py"], str(tmp_path))
+    assert result == ["sub/a.py"]
+
+
+def test_filter_safe_rejects_dotdot(tmp_path):
+    from PIG_T3.gui_qt.workers.diff_preview import _filter_safe
+
+    assert _filter_safe(["../escape.py"], str(tmp_path)) == []
+
+
+def test_filter_safe_rejects_absolute(tmp_path):
+    from PIG_T3.gui_qt.workers.diff_preview import _filter_safe
+
+    assert _filter_safe(["/etc/passwd"], str(tmp_path)) == []
+
+
+def test_filter_safe_dedupes_nested(tmp_path):
+    from PIG_T3.gui_qt.workers.diff_preview import _filter_safe
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("x")
+    (tmp_path / "pkg" / "b.py").write_text("y")
+    result = _filter_safe(["pkg/a.py", "pkg/b.py", "pkg"], str(tmp_path))
+    # pkg покрывает своих детей
+    assert result == ["pkg"]
+
+
+def test_filter_safe_empty(tmp_path):
+    from PIG_T3.gui_qt.workers.diff_preview import _filter_safe
+
+    assert _filter_safe([], str(tmp_path)) == []
