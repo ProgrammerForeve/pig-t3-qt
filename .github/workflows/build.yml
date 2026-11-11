@@ -14,10 +14,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             artifact_name: PIG-T3-linux
             binary_path: dist/PIG-T3
-          - os: windows-latest
+          - os: windows-2022
             artifact_name: PIG-T3-windows
             binary_path: dist/PIG-T3.exe
 
@@ -26,10 +26,10 @@ jobs:
       QT_QPA_PLATFORM: offscreen
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -53,7 +53,7 @@ jobs:
         run: uv run pyinstaller pig_t3.spec --noconfirm
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.binary_path }}
