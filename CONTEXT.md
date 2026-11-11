@@ -84,6 +84,14 @@ Ctrl+C/V/X/A/Z (ADR-007). QA-чек-лист: все поля ввода, все
 - `set_metrics(list[FileMetrics])`
 - `stop_scan()`
 
+## Релизы (`docs/releases/`)
+
+Артефакты каждого релиза:
+- `docs/releases/vX.Y.Z/QA.md` — QA-чек-лист (Windows/Linux smoke + фичи)
+- `docs/releases/vX.Y.Z/CHANGELOG.md` — сводка изменений от предыдущего тега
+
+Новый релиз = новая подпапка `docs/releases/vX.Y.Z/`.
+
 ## RAG (Retrieval-Augmented Generation)
 
 Опциональный слой семантического отбора файлов. Включается
