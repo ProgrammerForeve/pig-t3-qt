@@ -1,6 +1,10 @@
 import os
 import json
 import re
+import contextlib
+import logging
+
+log = logging.getLogger("pig_t3.patcher")
 
 import shutil
 
@@ -115,12 +119,21 @@ def clean_json_text(text):
     return text
 
 
-def apply_llm_changes(llm_response: str, root_folder: str = "."):
+def apply_llm_changes(
+    llm_response: str,
+    root_folder: str = ".",
+    *,
+    allow_command_execution: bool = False,
+    command_whitelist: str | list[str] = "",
+    command_default_timeout: int = 120,
+    runner=None,
+):
     """
     Применяет изменения на основе JSON-ответа от LLM.
     Поддерживает действия: create, delete, edit.
     """
     changes_log = []
+    aborted = False
 
     try:
         clean_json = clean_json_text(llm_response)
@@ -148,7 +161,11 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                 continue
             rel_path = action.get('source')
             abs_path = os.path.join(root_folder, rel_path)
-        elif action_type in ('mark_step_completed', 'update_settings'):
+        elif action_type in (
+            "mark_step_completed",
+            "update_settings",
+            "run_command",
+        ):
             rel_path = None
             abs_path = None
         else:
@@ -455,4 +472,74 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
             except Exception as e:
                 changes_log.append(f"❌ Edit Error {rel_path}: {e}")
 
+        # ---------- run_command ----------
+        elif action_type == "run_command":
+            command = action.get("command", "")
+            if not command or not isinstance(command, str):
+                changes_log.append("⚠️ run_command: пустая команда")
+                continue
+            if not allow_command_execution:
+                changes_log.append(
+                    f"⛔ RUN заблокирован (allow_command_execution=false): "
+                    f"{command}"
+                )
+                if action.get("on_failure") == "abort":
+                    aborted = True
+                    break
+                continue
+
+            timeout = action.get("timeout_sec", command_default_timeout)
+            output_path = action.get("output_path")
+            on_failure = action.get("on_failure", "continue")
+
+            try:
+                if runner is not None:
+                    result = runner(
+                        command,
+                        cwd=root_folder,
+                        timeout=timeout,
+                        output_path=output_path,
+                    )
+                else:
+                    from .command_runner import (
+                        parse_whitelist,
+                        run_command,
+                    )
+
+                    result = run_command(
+                        command,
+                        cwd=root_folder,
+                        timeout=timeout,
+                        output_path=output_path,
+                        whitelist=parse_whitelist(command_whitelist),
+                    )
+            except Exception as e:  # noqa: BLE001
+                changes_log.append(f"❌ run_command: {e}")
+                if on_failure == "abort":
+                    aborted = True
+                    changes_log.append("⏹ PIPELINE ABORTED")
+                    break
+                continue
+
+            status = "✅" if result.ok else "❌"
+            changes_log.append(
+                f"{status} RUN: {command} (exit={result.returncode}"
+                f"{', TIMEOUT' if result.timed_out else ''})"
+            )
+            if result.output_path:
+                changes_log.append(f"   📄 output: {result.output_path}")
+            if not result.ok:
+                preview = (result.stderr or result.stdout or "").strip()
+                preview = preview.replace("\n", " ⏎ ")[:200]
+                if preview:
+                    changes_log.append(f"   {preview}")
+                if on_failure == "abort":
+                    aborted = True
+                    changes_log.append("⏹ PIPELINE ABORTED")
+                    break
+
+    if aborted:
+        changes_log.append(
+            "⏹ PIPELINE ABORTED (последующие действия не выполнены)"
+        )
     return "\n".join(changes_log) if changes_log else "⚠️ Нет действий для выполнения."

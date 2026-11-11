@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from ...core.patcher import clean_json_text
 from ..dialogs.diff_dialog import DiffDialog
 from ..workers.apply_worker import ApplyWorker, UndoRedoWorker
-from ..workers.diff_preview import compute_diffs
+from ..workers.diff_preview import compute_diffs, extract_commands
 from ..workers.ollama_models_worker import (
     OllamaModelsWorker,
     cache_is_fresh,
@@ -41,6 +41,10 @@ from ..workers.ollama_models_worker import (
 _HISTORY_LIMIT = 10
 
 log = logging.getLogger("pig_t3.editor")
+
+
+def _show_warning(parent, title: str, text: str) -> None:
+    QMessageBox.warning(parent, title, text)
 
 
 def _show_info(parent, title: str, text: str) -> None:
@@ -251,10 +255,19 @@ class EditorTab(QWidget):
         except Exception as e:
             _show_error(self, "Ошибка предпросмотра", str(e))
             return
-        if not diffs:
+        commands = extract_commands(raw)
+        if commands and not self.settings.get("allow_command_execution", False):
+            _show_warning(
+                self,
+                "Команды заблокированы",
+                f"В патче {len(commands)} run_command, но в настройках "
+                "не включено «Разрешить выполнение команд». Команды "
+                "будут пропущены при применении.",
+            )
+        if not diffs and not commands:
             _show_info(self, "Просмотр", "Изменений нет.")
             return
-        dlg = DiffDialog(diffs, parent=self)
+        dlg = DiffDialog(diffs, commands=commands, parent=self)
         if dlg.exec() == DiffDialog.DialogCode.Accepted:
             self._on_apply()
 
@@ -304,7 +317,7 @@ class EditorTab(QWidget):
         self.btn_apply.setEnabled(False)
         self.btn_apply.setText("Применение...")
 
-        self._apply_worker = ApplyWorker(raw, self._current_path)
+        self._apply_worker = ApplyWorker(raw, self._current_path, settings=self.settings)
         self._apply_thread = QThread(self)
         self._apply_worker.moveToThread(self._apply_thread)
         self._apply_thread.started.connect(self._apply_worker.run)

@@ -80,10 +80,17 @@ class ApplyWorker(QObject):
     done = Signal(str, dict)  # (log, history_record)
     error = Signal(str)
 
-    def __init__(self, llm_text: str, root_folder: str, parent=None):
+    def __init__(
+        self,
+        llm_text: str,
+        root_folder: str,
+        settings: dict | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._llm_text = llm_text
         self._root = root_folder
+        self._settings = dict(settings or {})
 
     @Slot()
     def run(self) -> None:
@@ -103,7 +110,13 @@ class ApplyWorker(QObject):
             after = os.path.join(backup_root, "after")
 
             _copy_paths(self._root, before, filtered)
-            log = apply_llm_changes(self._llm_text, self._root)
+            log = apply_llm_changes(
+                self._llm_text,
+                self._root,
+                allow_command_execution=bool(self._settings.get("allow_command_execution", False)),
+                command_whitelist=self._settings.get("command_whitelist", ""),
+                command_default_timeout=int(self._settings.get("command_default_timeout", 120)),
+            )
             _copy_paths(self._root, after, filtered)
 
             record = {

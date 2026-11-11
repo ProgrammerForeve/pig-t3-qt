@@ -110,6 +110,7 @@ ignore = [
     "S108",   # /tmp/... в тестовых фейках (не реальные temp-файлы)
     "S603",   # subprocess для radon/pylint/bandit/git — осознанный выбор
     "S607",   # partial executable path (git, python -m radon) — резолвится через PATH
+    "S602",   # shell=True в run_command — opt-in, см. ADR-012
 ]
 
 [tool.ruff.lint.per-file-ignores]

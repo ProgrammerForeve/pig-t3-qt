@@ -116,7 +116,7 @@ class PlanStepWorker(QObject):
         self._parent_widget = parent_widget
         self._llm = llm_client
         self._context_builder = context_builder
-        self._apply_func = apply_func or apply_llm_changes
+        self._apply_func = apply_func or self._default_apply
         self._max_retries = max(0, max_retries)
         self._capture_llm_text = capture_llm_text
 
@@ -177,6 +177,15 @@ class PlanStepWorker(QObject):
             title=self._step.get("title", ""),
             description=self._step.get("description", ""),
             context=context,
+        )
+
+    def _default_apply(self, llm_text: str, root: str) -> str:
+        return apply_llm_changes(
+            llm_text,
+            root,
+            allow_command_execution=bool(self._settings.get("allow_command_execution", False)),
+            command_whitelist=self._settings.get("command_whitelist", ""),
+            command_default_timeout=int(self._settings.get("command_default_timeout", 120)),
         )
 
     def _apply_mark_to_step(self, llm_response: str) -> bool:
@@ -240,6 +249,14 @@ class PlanStepWorker(QObject):
 
                 self.progress.emit(80, "Применение изменений...")
                 apply_log = self._apply_func(llm_response, self._root)
+                if "PIPELINE ABORTED" in apply_log:
+                    self._step["status"] = "failed"
+                    self._step["report"] = apply_log
+                    self.error.emit(
+                        self._step,
+                        "Pipeline aborted: команда завершилась с ошибкой",
+                    )
+                    return
                 has_mark = self._apply_mark_to_step(llm_response)
                 self._step["status"] = "completed" if has_mark else "pending"
                 if not self._step.get("report"):
