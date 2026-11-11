@@ -84,6 +84,54 @@ Ctrl+C/V/X/A/Z (ADR-007). QA-чек-лист: все поля ввода, все
 - `set_metrics(list[FileMetrics])`
 - `stop_scan()`
 
+## RAG (Retrieval-Augmented Generation)
+
+Опциональный слой семантического отбора файлов. Включается
+чекбоксом «Использовать RAG» в `OptimizeDialog`. Выключен по
+умолчанию — требует Ollama (`nomic-embed-text`) или
+`sentence-transformers`.
+
+### Компоненты (`PIG_T3/core/rag/`)
+
+| Модуль | Назначение |
+| :--- | :--- |
+| `chunker.py` | AST-aware разбиение (функции/классы как чанки) |
+| `embeddings.py` | Ollama / sentence-transformers за одним Protocol |
+| `store.py` | `sqlite-vec` в `.pig/rag.db`, KNN через `vec0` |
+| `retriever.py` | BM25 + vector + RRF fusion (k=60) |
+| `indexer.py` | `ProjectIndexer.build(rel_paths)` → chunk + embed + store |
+| `optimizer.py` | `RagOptimizer.optimize()` — drop-in для `ContextOptimizer` |
+
+### Индекс
+
+- Файл: `<project>/.pig/rag.db` (в `.gitignore`)
+- Размер: ~10 MB на 10k чанков
+- Dimension фиксируется при создании; смена backend →
+  `DimensionMismatchError` (удалить файл и переиндексировать)
+- Полная пересборка при каждом `build()`. Инкрементальная —
+  future work (mtime + add/delete по файлам)
+
+### Fallback
+
+Если embeddings backend недоступен:
+- `OptimizeWorker._make_rag_optimizer` ловит `RuntimeError`,
+  логирует warning, возвращает `ContextOptimizer` (BFS+PageRank)
+- Пользователь видит «⚠️ RAG недоступен…» в статус-баре
+- Задача выполняется через старую эвристику
+
+### Как включить
+
+```bash
+# вариант 1 — Ollama (лёгкий)
+ollama serve
+ollama pull nomic-embed-text
+
+# вариант 2 — sentence-transformers (тяжёлый)
+uv sync --extra rag
+```
+
+Затем: **Генератор → ✨ Оптимизация контекста → ✅ Использовать RAG**.
+
 ## Как добавить новую вкладку
 
 1. Создать `PIG_T3/gui_qt/tabs/<name>.py` с классом `<Name>Tab(QWidget)`.

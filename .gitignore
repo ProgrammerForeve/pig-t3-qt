@@ -17,3 +17,9 @@ PKG-INFO
 .coverage
 .coverage.*
 htmlcov/
+
+# RAG
+.pig/rag.db
+.pig/rag.db-shm
+.pig/rag.db-wal
+.pig_cache/
