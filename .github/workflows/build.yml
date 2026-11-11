@@ -38,9 +38,24 @@ jobs:
 
       - name: Install system deps (Linux Qt)
         if: runner.os == 'Linux'
+        # apt на GitHub runners иногда падает из-за transient DNS
+        # (azure.archive.ubuntu.com). Retry + continue-on-error:
+        # если пакетов реально не хватает — тесты упадут с понятной
+        # ошибкой позже, а не на apt-шаге.
+        continue-on-error: true
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0
+          for i in 1 2 3; do
+            echo "=== apt attempt $i ==="
+            if sudo apt-get update --fix-missing && \
+               sudo apt-get install -y --fix-missing libgl1 libegl1 libxkbcommon-x11-0; then
+              echo "apt OK"
+              exit 0
+            fi
+            echo "apt attempt $i failed, retrying in 15s..."
+            sleep 15
+          done
+          echo "apt failed after 3 attempts — continuing anyway"
+          exit 0
 
       - name: Install project deps
         run: uv sync --extra dev
