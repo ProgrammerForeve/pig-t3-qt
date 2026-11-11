@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QLineEdit,
     QPushButton,
     QSpinBox,
     QTabWidget,
@@ -138,6 +139,41 @@ class SettingsDialog(QDialog):
         behavior_layout.addWidget(self.auto_refresh_cb)
         layout.addWidget(behavior_group)
 
+        cmd_group = QGroupBox("Выполнение команд (AI может запускать)")
+        cmd_layout = QVBoxLayout(cmd_group)
+        self.allow_cmd_cb = QCheckBox("Разрешить выполнение команд из JSON-патча")
+        self.allow_cmd_cb.setToolTip(
+            "AI сможет выполнять shell-команды (pytest, ruff, git) "
+            "и складывать вывод в файлы. ВНИМАНИЕ: эквивалентно "
+            "выполнению произвольного кода из ответа LLM."
+        )
+        cmd_layout.addWidget(self.allow_cmd_cb)
+        self.confirm_cmd_cb = QCheckBox("Подтверждать команды в редакторе")
+        self.confirm_cmd_cb.setToolTip("Показывать список команд в диалоге diff перед применением.")
+        cmd_layout.addWidget(self.confirm_cmd_cb)
+
+        cmd_row = QFormLayout()
+        self.cmd_timeout_spin = QSpinBox()
+        self.cmd_timeout_spin.setRange(1, 3600)
+        self.cmd_timeout_spin.setSuffix(" сек")
+        cmd_row.addRow("Таймаут по умолчанию:", self.cmd_timeout_spin)
+        self.cmd_whitelist_edit = QLineEdit()
+        self.cmd_whitelist_edit.setPlaceholderText("pytest,ruff,mypy (пусто = все разрешены)")
+        cmd_row.addRow("Whitelist:", self.cmd_whitelist_edit)
+        cmd_layout.addLayout(cmd_row)
+        layout.addWidget(cmd_group)
+
+        cmd_row = QFormLayout()
+        self.cmd_timeout_spin = QSpinBox()
+        self.cmd_timeout_spin.setRange(1, 3600)
+        self.cmd_timeout_spin.setSuffix(" сек")
+        cmd_row.addRow("Таймаут по умолчанию:", self.cmd_timeout_spin)
+        self.cmd_whitelist_edit = QLineEdit()
+        self.cmd_whitelist_edit.setPlaceholderText("pytest,ruff,mypy (пусто = все разрешены)")
+        cmd_row.addRow("Whitelist:", self.cmd_whitelist_edit)
+        cmd_layout.addLayout(cmd_row)
+        layout.addWidget(cmd_group)
+
         vis_group = QGroupBox("Отображение вкладок")
         vis_layout = QVBoxLayout(vis_group)
         self.vis_checks: dict[str, QCheckBox] = {
@@ -205,6 +241,10 @@ class SettingsDialog(QDialog):
         self.cc_weight_spin.setValue(float(s.get("opt_greedy_cc_weight", 0.1)))
         self.bytes_per_token_spin.setValue(int(s.get("opt_token_bytes_per_token", 4)))
         self.auto_refresh_cb.setChecked(bool(s.get("auto_refresh_tree", True)))
+        self.allow_cmd_cb.setChecked(bool(s.get("allow_command_execution", False)))
+        self.confirm_cmd_cb.setChecked(bool(s.get("command_confirm_in_editor", True)))
+        self.cmd_timeout_spin.setValue(int(s.get("command_default_timeout", 120)))
+        self.cmd_whitelist_edit.setText(s.get("command_whitelist", ""))
 
         vis = s.get("tabs_visibility", {})
         for key, cb in self.vis_checks.items():
@@ -241,6 +281,10 @@ class SettingsDialog(QDialog):
         s["opt_greedy_cc_weight"] = self.cc_weight_spin.value()
         s["opt_token_bytes_per_token"] = self.bytes_per_token_spin.value()
         s["auto_refresh_tree"] = self.auto_refresh_cb.isChecked()
+        s["allow_command_execution"] = self.allow_cmd_cb.isChecked()
+        s["command_confirm_in_editor"] = self.confirm_cmd_cb.isChecked()
+        s["command_default_timeout"] = self.cmd_timeout_spin.value()
+        s["command_whitelist"] = self.cmd_whitelist_edit.text().strip()
 
         s["tabs_visibility"] = {key: cb.isChecked() for key, cb in self.vis_checks.items()}
 

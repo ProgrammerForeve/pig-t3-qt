@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..workers.diff_preview import FileDiff
+from ..workers.diff_preview import CommandSpec, FileDiff
 
 _STATUS_ICON = {
     "created": "➕",
@@ -44,9 +44,15 @@ def _diff_to_html(text: str) -> str:
 
 
 class DiffDialog(QDialog):
-    def __init__(self, diffs: list[FileDiff], parent=None):
+    def __init__(
+        self,
+        diffs: list[FileDiff],
+        commands: list[CommandSpec] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._diffs = list(diffs)
+        self._commands = list(commands or [])
         self.setWindowTitle("Просмотр изменений")
         self.resize(1000, 640)
         self._setup_ui()
@@ -54,10 +60,15 @@ class DiffDialog(QDialog):
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        if not self._diffs:
+        if not self._diffs and not self._commands:
             layout.addWidget(QLabel("Нет изменений для отображения."))
         else:
-            summary = QLabel(f"Файлов затронуто: {len(self._diffs)}")
+            parts = []
+            if self._diffs:
+                parts.append(f"файлов: {len(self._diffs)}")
+            if self._commands:
+                parts.append(f"команд: {len(self._commands)}")
+            summary = QLabel("Затронуто: " + ", ".join(parts))
             layout.addWidget(summary)
 
             splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -67,6 +78,9 @@ class DiffDialog(QDialog):
             for d in self._diffs:
                 icon = _STATUS_ICON.get(d.status, "•")
                 QListWidgetItem(f"{icon}  {d.path}", self.file_list)
+            for c in self._commands:
+                tag = "⏹" if c.on_failure == "abort" else "▶"
+                QListWidgetItem(f"{tag}  $ {c.command}", self.file_list)
             self.file_list.currentRowChanged.connect(self._on_file_selected)
             splitter.addWidget(self.file_list)
 
@@ -78,7 +92,7 @@ class DiffDialog(QDialog):
             splitter.setStretchFactor(1, 3)
             splitter.setSizes([280, 720])
 
-            if self._diffs:
+            if self._diffs or self._commands:
                 self.file_list.setCurrentRow(0)
 
         btn_row = QHBoxLayout()
@@ -94,11 +108,29 @@ class DiffDialog(QDialog):
         self.btn_apply.clicked.connect(self.accept)
 
     def _on_file_selected(self, row: int) -> None:
-        if row < 0 or row >= len(self._diffs):
+        if row < 0:
             self.diff_view.clear()
             return
-        d = self._diffs[row]
-        if not d.unified_diff:
-            self.diff_view.setPlainText("(пустой diff)")
+        if row < len(self._diffs):
+            d = self._diffs[row]
+            if not d.unified_diff:
+                self.diff_view.setPlainText("(пустой diff)")
+                return
+            self.diff_view.setHtml(_diff_to_html(d.unified_diff))
             return
-        self.diff_view.setHtml(_diff_to_html(d.unified_diff))
+        cmd_idx = row - len(self._diffs)
+        if cmd_idx < 0 or cmd_idx >= len(self._commands):
+            self.diff_view.clear()
+            return
+        c = self._commands[cmd_idx]
+        lines = [
+            f"$ {c.command}",
+            "",
+            f"timeout: {c.timeout_sec}s",
+            f"on_failure: {c.on_failure}",
+        ]
+        if c.output_path:
+            lines.append(f"output_path: {c.output_path}")
+        else:
+            lines.append("output_path: (не сохраняется)")
+        self.diff_view.setPlainText("\n".join(lines))

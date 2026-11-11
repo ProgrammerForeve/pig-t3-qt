@@ -30,6 +30,16 @@ class FileDiff:
     unified_diff: str  # может быть пустым, если изменения нулевые
 
 
+@dataclass
+class CommandSpec:
+    """Команда из JSON-патча для предпросмотра."""
+
+    command: str
+    output_path: str | None = None
+    timeout_sec: int = 120
+    on_failure: str = "continue"
+
+
 def _extract_paths(data: list[dict]) -> list[str]:
     paths: list[str] = []
     for action in data:
@@ -152,3 +162,35 @@ def compute_diffs(llm_text: str, root_folder: str) -> list[FileDiff]:
         )
         diffs.append(FileDiff(path=p, status=status, unified_diff="".join(lines)))
     return diffs
+
+
+def extract_commands(llm_text: str) -> list[CommandSpec]:
+    """Извлечь все run_command из JSON. Никогда не бросает."""
+    try:
+        data = json.loads(clean_json_text(llm_text))
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    result: list[CommandSpec] = []
+    for action in data:
+        if not isinstance(action, dict):
+            continue
+        if action.get("action") != "run_command":
+            continue
+        cmd = action.get("command", "")
+        if not cmd or not isinstance(cmd, str):
+            continue
+        try:
+            timeout = int(action.get("timeout_sec", 120))
+        except (TypeError, ValueError):
+            timeout = 120
+        result.append(
+            CommandSpec(
+                command=cmd,
+                output_path=action.get("output_path"),
+                timeout_sec=timeout,
+                on_failure=str(action.get("on_failure", "continue")),
+            )
+        )
+    return result
