@@ -23,3 +23,6 @@ htmlcov/
 .pig/rag.db-shm
 .pig/rag.db-wal
 .pig_cache/
+
+# run_command outputs
+.pig/cmd/

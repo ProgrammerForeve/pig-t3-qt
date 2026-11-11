@@ -447,6 +447,68 @@ issue. QA-чек-лист покрывает `QLineEdit`, `QPlainTextEdit`,
 point — `run.py`, не `PIG_T3/main.py` (там относительные импорты,
 которые ломаются в frozen-режиме).
 
+## Сценарий 5: AI сам пишет и тестирует
+
+**Задача:** дать AI написать тест и сразу прогнать его — не
+переключаясь в терминал.
+
+### Включение
+
+**⚙️ Настройки → Функционал → «Выполнение команд»:**
+- ✅ Разрешить выполнение команд из JSON-патча
+- ✅ Подтверждать команды в редакторе (рекомендуется)
+- Таймаут: 120 сек
+- Whitelist: `pytest,ruff,mypy,git` (опционально)
+
+### Prompt для AI
+
+```
+Создай tests/test_calculate.py с 3 тестами для функции calculate_total
+из billing.py. Потом запусти pytest tests/test_calculate.py -v.
+Если упадёт — исправь и перезапусти. on_failure: abort.
+Формат: JSON по инструкции.
+```
+
+### Что вернёт AI
+
+```json
+[
+  {"action": "create", "path": "tests/test_calculate.py", "content": "..."},
+  {
+    "action": "run_command",
+    "command": "pytest tests/test_calculate.py -v",
+    "output_path": ".pig/cmd/pytest_calc.log",
+    "timeout_sec": 120,
+    "on_failure": "abort",
+    "explanation": "Verify the new tests pass"
+  }
+]
+```
+
+### Что увидите
+
+**«Просмотр изменений»:**
+```
+➕  tests/test_calculate.py
+▶  $ pytest tests/test_calculate.py -v
+```
+
+Клик на команду — детали: `timeout: 120`, `output_path`,
+`on_failure: abort`.
+
+**«Применить»:**
+- Создаётся `tests/test_calculate.py`
+- Запускается `pytest`. Вывод в `.pig/cmd/pytest_calc.log`
+- Если тесты прошли → `✅ RUN: pytest … (exit=0)`
+- Если упали → `❌ RUN: … (exit=1)` + `⏹ PIPELINE ABORTED`,
+  файлы уже созданы (undo доступен)
+
+### В плане (авто)
+
+В шаге плана `run_command` работает без диалога (только opt-in в
+настройках). Если команда упала и `on_failure: abort` — шаг
+переходит в `failed`, весь план останавливается. Кнопка
+«Повторить шаг с ошибкой» — стандартная.
 ---
 
 ## FAQ

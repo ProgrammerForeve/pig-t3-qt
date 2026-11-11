@@ -16,3 +16,4 @@
 | [009](009-quintptr-internalid.md) | quintptr internalId вместо Python internalPointer | Принято |
 | [010](010-pytest-sessionfinish.md) | os._exit в pytest_sessionfinish | Принято |
 | [011](011-rag.md) | RAG для семантического отбора файлов | Принято |
+| [012](012-run-command.md) | run_command — выполнение shell-команд из JSON | Принято |
