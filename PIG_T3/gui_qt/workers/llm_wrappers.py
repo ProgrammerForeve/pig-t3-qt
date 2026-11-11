@@ -46,6 +46,12 @@ FILES:
 log = logging.getLogger("pig_t3.llm_wrappers")
 
 
+_LMSTUDIO_PREFIX = "LM Studio: "
+_DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1"
+_DEFAULT_LMSTUDIO_API_KEY = "lm-studio"
+_DEFAULT_LMSTUDIO_TIMEOUT = 600
+
+
 def _build_prompt(task: str, meta_list: list[dict]) -> str:
     parts = []
     for meta in meta_list:
@@ -194,6 +200,30 @@ class _BomjBridge(QObject):
         return self._result
 
 
+class LMStudioWrapper:
+    """LM Studio через OpenAI-совместимый /v1/chat/completions."""
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str = _DEFAULT_LMSTUDIO_URL,
+        api_key: str = _DEFAULT_LMSTUDIO_API_KEY,
+        timeout: int = _DEFAULT_LMSTUDIO_TIMEOUT,
+    ):
+        from ...core.lmstudio_client import LMStudioClient
+
+        self._model = model
+        self._client = LMStudioClient(model, base_url, api_key, timeout)
+
+    def ask(self, prompt: str) -> str:
+        return self._client.chat(prompt)
+
+    def optimize_context(self, task: str, meta_list: list[dict]) -> dict[str, int]:
+        prompt = _build_prompt(task, meta_list)
+        response = self._client.chat(prompt)
+        return _parse_scores(response)
+
+
 class BomjWrapper:
     """BomjAPI через _BomjBridge. Создаётся в main-thread."""
 
@@ -222,7 +252,8 @@ def make_llm_client(
     None → None (offline optimize)
     BomjAPI → BomjWrapper(parent_widget)
     Web: * → WebWrapper
-    иначе → OllamaWrapper
+    LM Studio: <model> → LMStudioWrapper
+    иначе → OllamaWrapper (default, имя модели как есть)
     """
     if not model_name or model_name == "None":
         return None
@@ -233,5 +264,13 @@ def make_llm_client(
             model_name,
             timeout=int(settings.get("web_api_timeout", 600)),
             stable_count=int(settings.get("web_api_stable_count", 7)),
+        )
+    if model_name.startswith(_LMSTUDIO_PREFIX):
+        actual = model_name[len(_LMSTUDIO_PREFIX) :]
+        return LMStudioWrapper(
+            actual,
+            base_url=settings.get("lmstudio_base_url", _DEFAULT_LMSTUDIO_URL),
+            api_key=settings.get("lmstudio_api_key", _DEFAULT_LMSTUDIO_API_KEY),
+            timeout=int(settings.get("lmstudio_timeout", _DEFAULT_LMSTUDIO_TIMEOUT)),
         )
     return OllamaWrapper(model_name, settings.get("ollama_options", {}))

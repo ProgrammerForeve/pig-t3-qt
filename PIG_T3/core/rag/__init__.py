@@ -2,6 +2,7 @@
 from .chunker import Chunk, chunk_file, chunk_files
 from .embeddings import (
     EmbeddingsBackend,
+    LMStudioEmbeddings,
     OllamaEmbeddings,
     SentenceTransformersEmbeddings,
     make_embeddings_backend,
@@ -16,6 +17,7 @@ __all__ = [
     "DimensionMismatchError",
     "EmbeddingsBackend",
     "HybridRetriever",
+    "LMStudioEmbeddings",
     "OllamaEmbeddings",
     "ProjectIndexer",
     "RagOptimizer",

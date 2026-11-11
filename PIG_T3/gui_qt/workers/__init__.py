@@ -5,6 +5,7 @@ from .generate_plan_worker import GeneratePlanWorker
 from .generate_worker import GenerateWorker
 from .llm_wrappers import (
     BomjWrapper,
+    LMStudioWrapper,
     OllamaWrapper,
     WebWrapper,
     make_llm_client,
@@ -24,6 +25,7 @@ __all__ = [
     "BomjWrapper",
     "GeneratePlanWorker",
     "GenerateWorker",
+    "LMStudioWrapper",
     "OllamaModelsWorker",
     "OllamaWrapper",
     "OptimizeWorker",
