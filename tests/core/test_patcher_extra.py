@@ -226,3 +226,149 @@ def test_invalid_json_returns_error(tmp_path):
 def test_non_list_returns_error(tmp_path):
     log = apply_llm_changes('{"a": 1}', str(tmp_path))
     assert "должен быть списком" in log
+
+
+# ---------- Whitespace-flexible edit (regression Windows/tabs) ----------
+
+
+def test_replace_text_exact_still_works(tmp_path):
+    (tmp_path / "a.py").write_text("hello world\n")
+    _run(
+        [
+            {
+                "action": "edit",
+                "path": "a.py",
+                "operations": [
+                    {
+                        "type": "replace_text",
+                        "find": "hello world",
+                        "replace": "bye world",
+                    }
+                ],
+            }
+        ],
+        tmp_path,
+    )
+    assert (tmp_path / "a.py").read_text() == "bye world\n"
+
+
+def test_replace_text_flexible_tabs_vs_spaces(tmp_path):
+    """Файл с пробелами, find с табами."""
+    (tmp_path / "a.py").write_text("def foo():\n    return 1\n")
+    _run(
+        [
+            {
+                "action": "edit",
+                "path": "a.py",
+                "operations": [
+                    {
+                        "type": "replace_text",
+                        "find": "def foo():\n\treturn 1",
+                        "replace": "def foo():\n    return 2",
+                    }
+                ],
+            }
+        ],
+        tmp_path,
+    )
+    content = (tmp_path / "a.py").read_text()
+    assert "return 2" in content
+    assert "return 1" not in content
+
+
+def test_replace_text_flexible_double_space(tmp_path):
+    """Файл с одним пробелом, find с двумя."""
+    (tmp_path / "a.py").write_text("a = 1\nb = 2\n")
+    _run(
+        [
+            {
+                "action": "edit",
+                "path": "a.py",
+                "operations": [
+                    {
+                        "type": "replace_text",
+                        "find": "a  =  1",
+                        "replace": "a = 10",
+                    }
+                ],
+            }
+        ],
+        tmp_path,
+    )
+    assert "a = 10" in (tmp_path / "a.py").read_text()
+
+
+def test_replace_text_flexible_preserves_indent(tmp_path):
+    """Файл с indent 4, find без indent — заменяемый блок должен
+    получить indent 4."""
+    (tmp_path / "a.py").write_text("class C:\n    def m(self):\n        return 1\n")
+    _run(
+        [
+            {
+                "action": "edit",
+                "path": "a.py",
+                "operations": [
+                    {
+                        "type": "replace_text",
+                        "find": "def m(self):\n    return 1",
+                        "replace": "def m(self):\n    return 2",
+                    }
+                ],
+            }
+        ],
+        tmp_path,
+    )
+    content = (tmp_path / "a.py").read_text()
+    # Метод должен остаться в классе с indent 4
+    assert "    def m(self):" in content
+    assert "        return 2" in content
+
+
+def test_replace_text_not_found_reports_preview(tmp_path):
+    (tmp_path / "a.py").write_text("hello\n")
+    log = _run(
+        [
+            {
+                "action": "edit",
+                "path": "a.py",
+                "operations": [
+                    {
+                        "type": "replace_text",
+                        "find": "completely different content",
+                        "replace": "x",
+                    }
+                ],
+            }
+        ],
+        tmp_path,
+    )
+    assert "фрагмент не найден" in log
+    assert "completely different content" in log  # preview виден
+
+
+def test_replace_lines_anti_dup_ignores_indent(tmp_path):
+    """Если LLM прислал content с indent-дубликатом соседней строки,
+    anti-dup должен удалить."""
+    (tmp_path / "a.py").write_text("line1\nline2\nline3\n")
+    _run(
+        [
+            {
+                "action": "edit",
+                "path": "a.py",
+                "operations": [
+                    {
+                        "type": "replace_lines",
+                        "start": 2,
+                        "end": 2,
+                        # content содержит line2, но с другими пробелами
+                        "content": "  line2\n",
+                    }
+                ],
+            }
+        ],
+        tmp_path,
+    )
+    content = (tmp_path / "a.py").read_text()
+    # После замены: line1\n  line2\nline3 — но anti-dup должен
+    # не дать двум line2 подряд
+    assert content.count("line2") == 1

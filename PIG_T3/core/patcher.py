@@ -4,6 +4,83 @@ import re
 
 import shutil
 
+def _build_flexible_pattern(find_str: str) -> "re.Pattern[str]":
+    """find_str → regex, где каждая последовательность whitespace
+    матчит `\\s+`. Пример: '    def foo():\\n        return 1'
+    → 'def\\s+foo\\(\\):\\s+return\\s+1'.
+    """
+    parts = re.split(r"(\s+)", find_str.strip("\n"))
+    chunks: list[str] = []
+    for p in parts:
+        if not p:
+            continue
+        if p.isspace():
+            chunks.append(r"\s+")
+        else:
+            chunks.append(re.escape(p))
+    return re.compile("".join(chunks))
+
+
+def _line_indent_at(text: str, pos: int) -> str:
+    """Ведущий whitespace строки, содержащей pos. '' если pos не
+    в начале строки (после indent идёт код)."""
+    line_start = text.rfind("\n", 0, pos) + 1
+    prefix = text[line_start:pos]
+    if prefix.strip():
+        return ""  # pos не в начале строки — indent не применим
+    return prefix
+
+
+def _shift_indent(block: str, from_indent: str, to_indent: str) -> str:
+    """Сдвинуть все непустые строки block на (from_indent - to_indent)."""
+    if not from_indent and not to_indent:
+        return block
+    if from_indent == to_indent:
+        return block
+    lines = block.splitlines(keepends=True)
+    if not lines:
+        return block
+
+    if from_indent.startswith(to_indent):
+        prefix = from_indent[len(to_indent):]
+        return "".join(
+            prefix + ln if ln.strip() else ln for ln in lines
+        )
+    if to_indent.startswith(from_indent):
+        prefix = to_indent[len(from_indent):]
+        return "".join(
+            ln[len(prefix):] if ln.startswith(prefix) else ln
+            for ln in lines
+        )
+    return block  # несовместимые indent'ы — оставить как есть
+
+
+def _apply_replace_text(
+    full_text: str, find_str: str, replace_str: str
+) -> tuple[str, bool, str]:
+    """Заменить find_str на replace_str с whitespace-flexible поиском
+    и адаптацией indent. Возвращает (new_text, changed, status)."""
+    # Уровень 1: exact
+    if find_str in full_text:
+        return full_text.replace(find_str, replace_str), True, "exact"
+
+    # Уровень 2: whitespace-flexible
+    pattern = _build_flexible_pattern(find_str)
+    if not pattern.pattern:
+        return full_text, False, "empty find_str"
+    match = pattern.search(full_text)
+    if not match:
+        return full_text, False, "not found (exact + flexible)"
+
+    old_indent = _line_indent_at(full_text, match.start())
+    new_indent = _line_indent_at(replace_str, 0)
+    adapted = _shift_indent(replace_str, old_indent, new_indent)
+
+    new_text = (
+        full_text[: match.start()] + adapted + full_text[match.end():]
+    )
+    return new_text, True, "flexible"
+
 def _safe_path(root_folder: str, rel_path: str) -> str | None:
     """Резолвит rel_path внутри root_folder. None — если выход за пределы.
 
@@ -313,13 +390,14 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                             continue
 
                         # --- Anti-Duplication Logic ---
-                        # Удаляем дубликат сверху
+                        # Сравниваем по .strip() — indent и \r\n не важны.
+                        # Иначе anti-dup не срабатывает, если LLM скопировал
+                        # соседнюю строку с другими пробелами → дублирование.
                         if idx_start > 0 and new_lines_list:
-                            if lines[idx_start - 1].rstrip('\r\n') == new_lines_list[0].rstrip('\r\n'):
+                            if lines[idx_start - 1].strip() == new_lines_list[0].strip():
                                 new_lines_list.pop(0)
-                        # Удаляем дубликат снизу
                         if idx_end < len(lines) and new_lines_list:
-                            if lines[idx_end].rstrip('\r\n') == new_lines_list[-1].rstrip('\r\n'):
+                            if lines[idx_end].strip() == new_lines_list[-1].strip():
                                 new_lines_list.pop(-1)
                         # ------------------------------
 
@@ -348,12 +426,22 @@ def apply_llm_changes(llm_response: str, root_folder: str = "."):
                         find_str = op.get('find')
                         replace_str = op.get('replace')
                         if find_str and replace_str is not None:
-                            if find_str in full_text:
-                                full_text = full_text.replace(find_str, replace_str)
+                            full_text, changed, status = _apply_replace_text(
+                                full_text, find_str, replace_str
+                            )
+                            if changed:
                                 file_changed = True
-                                changes_log.append(f"✏️ Text Patch {rel_path}: замена фрагмента")
+                                note = "" if status == "exact" else f" ({status})"
+                                changes_log.append(
+                                    f"✏️ Text Patch {rel_path}: замена фрагмента{note}"
+                                )
                             else:
-                                changes_log.append(f"⚠️ Text Patch {rel_path}: фрагмент не найден")
+                                preview = find_str[:60].replace("\n", "\\n")
+                                changes_log.append(
+                                    f"⚠️ Text Patch {rel_path}: фрагмент не найден "
+                                    f"({status}) — проверьте отступы. "
+                                    f"Find: {preview!r}"
+                                )
                     lines = full_text.splitlines(keepends=True)
 
                 if file_changed:
