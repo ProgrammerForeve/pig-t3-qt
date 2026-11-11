@@ -40,12 +40,24 @@ class OptimizeWorker(QObject):
         greedy_cc_weight: float = 0.1,
         token_bytes_per_token: int = 4,
         ignore_list: str = "",
+        scan_config: dict | None = None,
+        use_rag: bool = False,
         optimizer: ContextOptimizer | None = None,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
+        self._fallback_callback = None
+
         if optimizer is not None:
             self._optimizer = optimizer
+        elif use_rag:
+            self._optimizer = self._make_rag_optimizer(
+                root_folder=root_folder,
+                task=task,
+                limit_tokens=limit_tokens,
+                scan_config=scan_config,
+                token_bytes_per_token=token_bytes_per_token,
+            )
         else:
             self._optimizer = ContextOptimizer(
                 root_folder=root_folder,
@@ -60,6 +72,46 @@ class OptimizeWorker(QObject):
                 ignore_list=ignore_list,
             )
 
+    def _make_rag_optimizer(
+        self,
+        root_folder: str,
+        task: str,
+        limit_tokens: int,
+        scan_config: dict | None,
+        token_bytes_per_token: int,
+    ):
+        """Создать RagOptimizer с graceful fallback на ContextOptimizer.
+
+        Если embeddings backend недоступен (нет Ollama и нет
+        sentence-transformers) — создаём ContextOptimizer вместо
+        падения, чтобы пользователь не видел ошибку при первом
+        использовании RAG без окружения.
+        """
+        try:
+            from ...core.rag.optimizer import RagOptimizer
+
+            return RagOptimizer(
+                root_folder=root_folder,
+                task=task,
+                limit_tokens=limit_tokens,
+                scan_config=scan_config,
+                backend_pref="auto",
+                force_reindex=False,
+                bytes_per_token=token_bytes_per_token,
+            )
+        except RuntimeError as e:
+            import logging
+
+            logging.getLogger("pig_t3.optimize_worker").warning("RAG недоступен, fallback на ContextOptimizer: %s", e)
+            # fallback: офлайн-эвристика (без LLM)
+            return ContextOptimizer(
+                root_folder=root_folder,
+                task=task,
+                limit_tokens=limit_tokens,
+                llm_client=None,
+                token_bytes_per_token=token_bytes_per_token,
+            )
+
     def _is_interrupted(self) -> bool:
         thread = QThread.currentThread()
         return thread is not None and thread.isInterruptionRequested()
@@ -69,10 +121,17 @@ class OptimizeWorker(QObject):
             raise _WorkerCancelled()
         self.progress.emit(percent, msg)
 
+    def _on_fallback(self, msg: str) -> None:
+        """RAG или vector упали — оптимизатор сам выберет fallback."""
+        self.progress.emit(50, f"⚠️ {msg}")
+
     @Slot()
     def run(self) -> None:
         try:
-            selected = self._optimizer.optimize(progress_callback=self._on_progress)
+            selected = self._optimizer.optimize(
+                progress_callback=self._on_progress,
+                fallback_callback=self._on_fallback,
+            )
         except _WorkerCancelled:
             self.cancelled.emit()
             return

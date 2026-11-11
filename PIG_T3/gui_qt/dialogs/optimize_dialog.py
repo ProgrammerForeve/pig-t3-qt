@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -137,6 +138,14 @@ class OptimizeDialog(QDialog):
         self.model_combo.addItems(self._models)
         layout.addWidget(self.model_combo)
 
+        self.cb_use_rag = QCheckBox("Использовать RAG (semantic search по коду)")
+        self.cb_use_rag.setToolTip(
+            "Индексирует проект в .pig/rag.db и отбирает файлы "
+            "семантически релевантные задаче. Первый запуск медленнее "
+            "(эмбеддинги через Ollama или sentence-transformers)."
+        )
+        layout.addWidget(self.cb_use_rag)
+
         layout.addStretch(1)
 
         btn_row = QHBoxLayout()
@@ -159,6 +168,7 @@ class OptimizeDialog(QDialog):
             self.model_combo.setCurrentIndex(idx)
         elif self._models:
             self.model_combo.setCurrentIndex(0)
+        self.cb_use_rag.setChecked(bool(self.settings.get("opt_use_rag", False)))
 
     def _connect_signals(self) -> None:
         self.pct_slider.valueChanged.connect(self._update_estimate)
@@ -222,6 +232,7 @@ class OptimizeDialog(QDialog):
         self.settings["opt_default_model"] = self.model_combo.currentText()
         self.settings["opt_compression_pct"] = self.pct_slider.value()
         self.settings["opt_bfs_depth"] = self.depth_spin.value()
+        self.settings["opt_use_rag"] = self.cb_use_rag.isChecked()
         self.accept()
 
     # ---------- Public ----------

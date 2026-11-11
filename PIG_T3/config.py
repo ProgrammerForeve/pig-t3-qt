@@ -61,6 +61,7 @@ class ConfigManager:
             "opt_chunk_size": 7000,
             "opt_chunk_unit": "tokens",
             "opt_default_model": "None",
+            "opt_use_rag": False,
             "ui_tree_expanded": [],
             "ui_tree_unchecked": [],
             "theme": "dark",

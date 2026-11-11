@@ -359,6 +359,12 @@ class GeneratorTab(QWidget):
             return
 
         llm_client = make_llm_client(model, self, self.settings)
+        use_rag = bool(self.settings.get("opt_use_rag", False))
+        scan_config = {
+            "extensions": self.ext_edit.text(),
+            "ignore_list": self.ignore_edit.text(),
+            "strict_mode": self.settings.get("strict_mode", False),
+        }
         self._opt_worker = OptimizeWorker(
             root_folder=root,
             task=task,
@@ -369,6 +375,8 @@ class GeneratorTab(QWidget):
             greedy_cc_weight=float(self.settings.get("opt_greedy_cc_weight", 0.1)),
             token_bytes_per_token=int(self.settings.get("opt_token_bytes_per_token", 4)),
             ignore_list=self.ignore_edit.text(),
+            scan_config=scan_config,
+            use_rag=use_rag,
             llm_client=llm_client,
         )
         # model используется воркером с llm_client=None — offline.
