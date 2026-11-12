@@ -149,3 +149,27 @@ def test_streaming_include_empty(project):
     path, *_ = analyzer.process(_cfg(project, include_empty_folders=True))
     content = Path(path).read_text(encoding="utf-8")
     assert "empty" in content
+
+
+# ---------- C8: системный промпт содержит run_command + ENVIRONMENT ----------
+
+
+def test_patching_instructions_contain_run_command(project):
+    analyzer = ProjectAnalyzer()
+    result = analyzer.process(_cfg(project, add_edit_prompt=True))
+    assert result is not None
+    path, *_ = result
+    content = Path(path).read_text(encoding="utf-8")
+    assert "run_command" in content
+    assert "on_failure" in content
+    assert "timeout_sec" in content
+
+
+def test_patching_instructions_contain_environment_block(project):
+    analyzer = ProjectAnalyzer()
+    result = analyzer.process(_cfg(project, add_edit_prompt=True))
+    path, *_ = result
+    content = Path(path).read_text(encoding="utf-8")
+    assert "[EXECUTION ENVIRONMENT]" in content
+    assert "OS:" in content
+    assert "Shell (used for run_command):" in content

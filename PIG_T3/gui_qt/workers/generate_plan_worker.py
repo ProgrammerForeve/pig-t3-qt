@@ -34,6 +34,8 @@ RULES:
 2. Each object must have 'id', 'title' (string), and 'description' (string, detailed technical instructions).
 3. Order steps logically to achieve the task.
 
+{env_block}
+
 [PROJECT CONTEXT]
 {context}"""
 
@@ -154,7 +156,17 @@ class GeneratePlanWorker(QObject):
                 self.error.emit("Модель LLM не выбрана или недоступна")
                 return
 
-            prompt = _PLAN_PROMPT_TEMPLATE.format(concept=self._concept, context=context)
+            from ...core.agent_context import (
+                collect_environment,
+                format_environment_block,
+            )
+
+            env_block = format_environment_block(collect_environment(self._root))
+            prompt = _PLAN_PROMPT_TEMPLATE.format(
+                concept=self._concept,
+                context=context,
+                env_block=env_block,
+            )
             response = llm.ask(prompt)
             if self._is_interrupted():
                 self.cancelled.emit()

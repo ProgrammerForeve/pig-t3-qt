@@ -15,12 +15,12 @@ GUI переписан с Tkinter на PySide6 в v2.0.0. См. [docs/adr/](docs
 
 ## 📥 Скачать готовый бинарник
 
-Последний релиз: **[v2.1.0](https://github.com/ProgrammerForeve/pig-t3-qt/releases/tag/v2.1.0)**
+Последний релиз: **[v2.2.0](https://github.com/ProgrammerForeve/pig-t3-qt/releases/tag/v2.2.0)**
 
 | OS | Скачать | Размер |
 | :--- | :--- | :--- |
-| **Windows** | [PIG-T3-windows.zip](https://github.com/ProgrammerForeve/pig-t3-qt/releases/download/v2.1.0/PIG-T3-windows.zip) | ~108 MB |
-| **Linux** | [PIG-T3-linux.zip](https://github.com/ProgrammerForeve/pig-t3-qt/releases/download/v2.1.0/PIG-T3-linux.zip) | ~144 MB |
+| **Windows** | [PIG-T3-windows.zip](https://github.com/ProgrammerForeve/pig-t3-qt/releases/download/v2.2.0/PIG-T3-windows.zip) | ~108 MB |
+| **Linux** | [PIG-T3-linux.zip](https://github.com/ProgrammerForeve/pig-t3-qt/releases/download/v2.2.0/PIG-T3-linux.zip) | ~144 MB |
 
 - **Windows:** распаковать, запустить `PIG-T3.exe`
   (SmartScreen → **More info → Run anyway** — бинарник не подписан)
@@ -383,7 +383,7 @@ Start** в LM Studio, порт `1234` по умолчанию. Список кэ
 
 ## 📜 Changelog
 
-### v2.1.0 — LM Studio, RAG, run_command (2026-11-12)
+### v2.2.0 — LM Studio, RAG, run_command (2026-11-12)
 
 **42 коммита** с v2.0.0. Тестов: 275 → ~780. Coverage: 55% → 67%.
 

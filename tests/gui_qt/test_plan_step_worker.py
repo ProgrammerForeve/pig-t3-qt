@@ -160,3 +160,38 @@ def test_append_description_from_mark(qtbot, managed_thread):
     args = run_worker_and_wait(qtbot, w, t, done_signal=w.done)
     step, _log = args
     assert "TODO: tests" in step["description"]
+
+
+def test_prompt_contains_environment_block(qtbot, managed_thread, tmp_path):
+    """C8: промпт шага содержит [EXECUTION ENVIRONMENT] блок."""
+    captured = {}
+
+    class _CaptureLLM:
+        def ask(self, prompt):
+            captured["prompt"] = prompt
+            return '[{"action": "mark_step_completed", "step_id": "s1"}]'
+
+    w = PlanStepWorker(
+        step={
+            "id": "s1",
+            "title": "T",
+            "description": "d",
+            "completed": False,
+            "status": "pending",
+            "report": "",
+        },
+        plan_data=[],
+        root_folder=str(tmp_path),
+        model_name="fake",
+        settings={},
+        llm_client=_CaptureLLM(),
+        context_builder=lambda _r, _c, _l: "",
+        max_retries=0,
+    )
+    t = managed_thread()
+    w.moveToThread(t)
+    from tests.helpers.threading import run_worker_and_wait
+
+    run_worker_and_wait(qtbot, w, t, done_signal=w.done)
+    assert "[EXECUTION ENVIRONMENT]" in captured["prompt"]
+    assert "RULES FOR run_command:" in captured["prompt"]

@@ -44,6 +44,12 @@ CRITICAL INSTRUCTIONS:
 6. To update the plan status, include a 'mark_step_completed' action when done.
 7. ANTI-DESTRUCTION: Use 'edit' for existing files, never 'create' to overwrite.
 8. Do NOT execute other steps from the plan.
+9. To VALIDATE your changes, use 'run_command' (pytest, ruff, mypy,
+   git status/diff). See [EXECUTION ENVIRONMENT] below for the
+   correct shell and OS-specific syntax. Do NOT run destructive
+   commands.
+
+{env_block}
 
 [PROJECT CONTEXT]
 {context}"""
@@ -170,6 +176,12 @@ class PlanStepWorker(QObject):
         return "".join(parts)
 
     def _build_prompt(self, context: str) -> str:
+        from ...core.agent_context import (
+            collect_environment,
+            format_environment_block,
+        )
+
+        env_block = format_environment_block(collect_environment(self._root))
         plan_json = json.dumps(self._plan_data, indent=2, ensure_ascii=False)
         return _EXEC_PROMPT.format(
             plan_json=plan_json,
@@ -177,6 +189,7 @@ class PlanStepWorker(QObject):
             title=self._step.get("title", ""),
             description=self._step.get("description", ""),
             context=context,
+            env_block=env_block,
         )
 
     def _default_apply(self, llm_text: str, root: str) -> str:
