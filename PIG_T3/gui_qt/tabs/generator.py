@@ -377,6 +377,7 @@ class GeneratorTab(QWidget):
             ignore_list=self.ignore_edit.text(),
             scan_config=scan_config,
             use_rag=use_rag,
+            settings=self.settings,
             llm_client=llm_client,
         )
         # model используется воркером с llm_client=None — offline.

@@ -36,6 +36,18 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..workers.lmstudio_models_worker import (
+    LMStudioModelsWorker,
+)
+from ..workers.lmstudio_models_worker import (
+    cache_is_fresh as lmstudio_cache_is_fresh,
+)
+from ..workers.lmstudio_models_worker import (
+    get_cached_models as get_lmstudio_cached_models,
+)
+from ..workers.lmstudio_models_worker import (
+    save_models_to_cache as save_lmstudio_models_to_cache,
+)
 from ..workers.ollama_models_worker import (
     OllamaModelsWorker,
     cache_is_fresh,
@@ -85,10 +97,17 @@ class OptimizeDialog(QDialog):
             for m in cached:
                 if m not in base:
                     base.append(m)
+            lmstudio_cached = get_lmstudio_cached_models(self.settings)
+            for m in lmstudio_cached:
+                name = f"LM Studio: {m}"
+                if name not in base:
+                    base.append(name)
             self._models = base
 
         self._models_thread: QThread | None = None
         self._models_worker: OllamaModelsWorker | None = None
+        self._lmstudio_models_thread: QThread | None = None
+        self._lmstudio_models_worker: LMStudioModelsWorker | None = None
 
         self._setup_ui()
         self._populate()
@@ -97,8 +116,11 @@ class OptimizeDialog(QDialog):
 
         # Если models переданы явно — caller контролирует список,
         # воркер не нужен (важно для тестов: не дёргаем Ollama в фоне).
-        if not explicit_models and auto_fetch_models and not cache_is_fresh(self.settings):
-            self._fetch_models_async()
+        if not explicit_models and auto_fetch_models:
+            if not cache_is_fresh(self.settings):
+                self._fetch_models_async()
+            if not lmstudio_cache_is_fresh(self.settings):
+                self._fetch_lmstudio_models_async()
 
     # ---------- UI ----------
 
@@ -220,8 +242,56 @@ class OptimizeDialog(QDialog):
             except RuntimeError:
                 pass
 
+    def _fetch_lmstudio_models_async(self) -> None:
+        if self._lmstudio_models_thread is not None:
+            return
+        worker = LMStudioModelsWorker(
+            base_url=self.settings.get("lmstudio_base_url", "http://localhost:1234/v1"),
+            api_key=self.settings.get("lmstudio_api_key", "lm-studio"),
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._on_lmstudio_models_fetched)
+        worker.error.connect(self._on_lmstudio_models_error)
+        for sig in (worker.done, worker.error):
+            sig.connect(lambda *_args, w=worker, t=thread: self._cleanup_lmstudio_thread(w, t))
+        self._lmstudio_models_worker = worker
+        self._lmstudio_models_thread = thread
+        thread.start()
+
+    def _on_lmstudio_models_fetched(self, models: list) -> None:
+        save_lmstudio_models_to_cache(self.settings, models)
+        current = self.model_combo.currentText()
+        existing = {self.model_combo.itemText(i) for i in range(self.model_combo.count())}
+        for m in models:
+            name = f"LM Studio: {m}"
+            if name not in existing:
+                self.model_combo.addItem(name)
+                if name not in self._models:
+                    self._models.append(name)
+        idx = self.model_combo.findText(current)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+
+    def _on_lmstudio_models_error(self, _msg: str) -> None:
+        pass
+
+    def _cleanup_lmstudio_thread(self, worker, thread) -> None:
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except RuntimeError:
+                pass
+        if self._lmstudio_models_thread is thread:
+            self._lmstudio_models_thread = None
+            self._lmstudio_models_worker = None
+
     def closeEvent(self, event) -> None:
         self._cleanup_models_thread()
+        if self._lmstudio_models_thread is not None:
+            self._cleanup_lmstudio_thread(self._lmstudio_models_worker, self._lmstudio_models_thread)
         super().closeEvent(event)
 
     def _on_start(self) -> None:

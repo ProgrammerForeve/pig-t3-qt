@@ -31,6 +31,18 @@ from ...core.patcher import clean_json_text
 from ..dialogs.diff_dialog import DiffDialog
 from ..workers.apply_worker import ApplyWorker, UndoRedoWorker
 from ..workers.diff_preview import compute_diffs, extract_commands
+from ..workers.lmstudio_models_worker import (
+    LMStudioModelsWorker,
+)
+from ..workers.lmstudio_models_worker import (
+    cache_is_fresh as lmstudio_cache_is_fresh,
+)
+from ..workers.lmstudio_models_worker import (
+    get_cached_models as get_lmstudio_cached_models,
+)
+from ..workers.lmstudio_models_worker import (
+    save_models_to_cache as save_lmstudio_models_to_cache,
+)
 from ..workers.ollama_models_worker import (
     OllamaModelsWorker,
     cache_is_fresh,
@@ -84,6 +96,8 @@ class EditorTab(QWidget):
         self._apply_worker: ApplyWorker | None = None
         self._models_thread: QThread | None = None
         self._models_worker: OllamaModelsWorker | None = None
+        self._lmstudio_models_thread: QThread | None = None
+        self._lmstudio_models_worker: LMStudioModelsWorker | None = None
         self._undo_thread: QThread | None = None
         self._undo_worker: UndoRedoWorker | None = None
 
@@ -170,9 +184,16 @@ class EditorTab(QWidget):
         for m in cached:
             if m not in base:
                 base.append(m)
+        lmstudio_cached = get_lmstudio_cached_models(self.settings)
+        for m in lmstudio_cached:
+            name = f"LM Studio: {m}"
+            if name not in base:
+                base.append(name)
         self.model_combo.addItems(base)
         if not cache_is_fresh(self.settings):
             self._fetch_models_async()
+        if not lmstudio_cache_is_fresh(self.settings):
+            self._fetch_lmstudio_models_async()
 
     def _fetch_models_async(self) -> None:
         if self._models_thread is not None:
@@ -211,6 +232,50 @@ class EditorTab(QWidget):
                 thread.wait(3000)
             except RuntimeError:
                 pass
+
+    def _fetch_lmstudio_models_async(self) -> None:
+        if self._lmstudio_models_thread is not None:
+            return
+        worker = LMStudioModelsWorker(
+            base_url=self.settings.get("lmstudio_base_url", "http://localhost:1234/v1"),
+            api_key=self.settings.get("lmstudio_api_key", "lm-studio"),
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._on_lmstudio_models_fetched)
+        worker.error.connect(self._on_lmstudio_models_error)
+        for sig in (worker.done, worker.error):
+            sig.connect(lambda *_args, w=worker, t=thread: self._cleanup_lmstudio_thread(w, t))
+        self._lmstudio_models_worker = worker
+        self._lmstudio_models_thread = thread
+        thread.start()
+
+    def _on_lmstudio_models_fetched(self, models: list) -> None:
+        save_lmstudio_models_to_cache(self.settings, models)
+        current = self.model_combo.currentText()
+        existing = {self.model_combo.itemText(i) for i in range(self.model_combo.count())}
+        for m in models:
+            name = f"LM Studio: {m}"
+            if name not in existing:
+                self.model_combo.addItem(name)
+        idx = self.model_combo.findText(current)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+
+    def _on_lmstudio_models_error(self, _msg: str) -> None:
+        pass
+
+    def _cleanup_lmstudio_thread(self, worker, thread) -> None:
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except RuntimeError:
+                pass
+        if self._lmstudio_models_thread is thread:
+            self._lmstudio_models_thread = None
+            self._lmstudio_models_worker = None
 
     def _populate(self) -> None:
         opts = self.settings.get("ollama_options", {})
@@ -443,6 +508,8 @@ class EditorTab(QWidget):
     def stop_workers(self) -> None:
         """Остановка для MainWindow.closeEvent."""
         self._cleanup_models_thread()
+        if self._lmstudio_models_thread is not None:
+            self._cleanup_lmstudio_thread(self._lmstudio_models_worker, self._lmstudio_models_thread)
         for thread_attr in ("_apply_thread", "_undo_thread"):
             thread = getattr(self, thread_attr, None)
             if thread is not None:

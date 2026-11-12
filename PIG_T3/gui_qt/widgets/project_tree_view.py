@@ -16,12 +16,9 @@ _DEFAULT_ROW_HEIGHT = 22
 
 
 class _RowHeightDelegate(QStyledItemDelegate):
-    """Делегат с фиксированной высотой строки.
+    """Делегат с фиксированной высотой строки."""
 
-    Дефолтный QStyledItemDelegate возвращает высоту, определённую темой
-    Qt (на Linux обычно ~25px). Наша обёртка позволяет задать
-    компактную высоту (из `tree_row_height` в конфиге).
-    """
+    _DEFAULT_HEIGHT = 20
 
     def __init__(self, row_height: int, parent=None):
         super().__init__(parent)
@@ -31,8 +28,20 @@ class _RowHeightDelegate(QStyledItemDelegate):
         self._row_height = max(12, int(h))
 
     def sizeHint(self, option, index):
-        size = super().sizeHint(option, index)
-        size.setHeight(self._row_height)
+        from PySide6.QtCore import QSize
+
+        # При teardown C++ delegate может быть уже удалён, но Qt ещё
+        # вызывает sizeHint. Явный QStyledItemDelegate.sizeHint(self, ...)
+        # вместо super() — если self мёртв, RuntimeError ловится здесь,
+        # а не на этапе super()-lookup.
+        try:
+            size = QStyledItemDelegate.sizeHint(self, option, index)
+        except (RuntimeError, AttributeError):
+            return QSize(0, self._DEFAULT_HEIGHT)
+        try:
+            size.setHeight(self._row_height)
+        except (RuntimeError, AttributeError):
+            return QSize(0, self._DEFAULT_HEIGHT)
         return size
 
 
@@ -49,12 +58,17 @@ class ProjectTreeView(QTreeView):
         self.setItemDelegate(self._row_delegate)
 
     def apply_row_height(self, height: int) -> None:
-        """Установить высоту строки (px). Игнорирует невалидные значения."""
+        """Установить высоту строки (px). Игнорирует невалидные значения.
+
+        Использует viewport().update() вместо reset() — reset()
+        создаёт persistent indices, которые при teardown view
+        пытаются разрезолвиться через уже-удалённый delegate.
+        """
         if height is None or int(height) <= 0:
             return
         self._row_height = int(height)
         self._row_delegate.set_row_height(self._row_height)
-        self.reset()
+        self.viewport().update()
 
     def row_height(self) -> int:
         return self._row_height

@@ -42,10 +42,12 @@ class OptimizeWorker(QObject):
         ignore_list: str = "",
         scan_config: dict | None = None,
         use_rag: bool = False,
+        settings: dict | None = None,
         optimizer: ContextOptimizer | None = None,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
+        self._settings = dict(settings or {})
         self._fallback_callback = None
 
         if optimizer is not None:
@@ -82,20 +84,31 @@ class OptimizeWorker(QObject):
     ):
         """Создать RagOptimizer с graceful fallback на ContextOptimizer.
 
-        Если embeddings backend недоступен (нет Ollama и нет
-        sentence-transformers) — создаём ContextOptimizer вместо
-        падения, чтобы пользователь не видел ошибку при первом
-        использовании RAG без окружения.
+        Backend embeddings собирается здесь явно через
+        make_embeddings_backend('auto', lmstudio_*) — auto-цепочка
+        Ollama → LM Studio → sentence-transformers. LM Studio-настройки
+        (base_url, api_key, model) берутся из self._settings, чтобы
+        прокинуть их в фабрику C7a.
+
+        Если ничего не доступно (RuntimeError) — fallback на
+        ContextOptimizer (BFS+PageRank без LLM).
         """
         try:
+            from ...core.rag.embeddings import make_embeddings_backend
             from ...core.rag.optimizer import RagOptimizer
 
+            backend = make_embeddings_backend(
+                "auto",
+                lmstudio_model=(self._settings.get("lmstudio_embeddings_model") or None),
+                lmstudio_base_url=self._settings.get("lmstudio_base_url", "http://localhost:1234/v1"),
+                lmstudio_api_key=self._settings.get("lmstudio_api_key", "lm-studio"),
+            )
             return RagOptimizer(
                 root_folder=root_folder,
                 task=task,
                 limit_tokens=limit_tokens,
                 scan_config=scan_config,
-                backend_pref="auto",
+                backend=backend,
                 force_reindex=False,
                 bytes_per_token=token_bytes_per_token,
             )
@@ -103,7 +116,6 @@ class OptimizeWorker(QObject):
             import logging
 
             logging.getLogger("pig_t3.optimize_worker").warning("RAG недоступен, fallback на ContextOptimizer: %s", e)
-            # fallback: офлайн-эвристика (без LLM)
             return ContextOptimizer(
                 root_folder=root_folder,
                 task=task,

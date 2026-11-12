@@ -152,6 +152,23 @@ class SettingsDialog(QDialog):
         self.confirm_cmd_cb.setToolTip("Показывать список команд в диалоге diff перед применением.")
         cmd_layout.addWidget(self.confirm_cmd_cb)
 
+        lmstudio_group = QGroupBox("LM Studio (OpenAI-совместимый)")
+        lmstudio_form = QFormLayout(lmstudio_group)
+        self.lmstudio_url_edit = QLineEdit()
+        self.lmstudio_url_edit.setPlaceholderText("http://localhost:1234/v1")
+        lmstudio_form.addRow("Base URL:", self.lmstudio_url_edit)
+        self.lmstudio_key_edit = QLineEdit()
+        self.lmstudio_key_edit.setPlaceholderText("lm-studio")
+        lmstudio_form.addRow("API key:", self.lmstudio_key_edit)
+        self.lmstudio_timeout_spin = QSpinBox()
+        self.lmstudio_timeout_spin.setRange(1, 3600)
+        self.lmstudio_timeout_spin.setSuffix(" сек")
+        lmstudio_form.addRow("Таймаут:", self.lmstudio_timeout_spin)
+        self.lmstudio_embeddings_edit = QLineEdit()
+        self.lmstudio_embeddings_edit.setPlaceholderText("например nomic-embed-text-v1.5 (пусто = авто)")
+        lmstudio_form.addRow("Embeddings модель:", self.lmstudio_embeddings_edit)
+        layout.addWidget(lmstudio_group)
+
         cmd_row = QFormLayout()
         self.cmd_timeout_spin = QSpinBox()
         self.cmd_timeout_spin.setRange(1, 3600)
@@ -245,6 +262,10 @@ class SettingsDialog(QDialog):
         self.confirm_cmd_cb.setChecked(bool(s.get("command_confirm_in_editor", True)))
         self.cmd_timeout_spin.setValue(int(s.get("command_default_timeout", 120)))
         self.cmd_whitelist_edit.setText(s.get("command_whitelist", ""))
+        self.lmstudio_url_edit.setText(s.get("lmstudio_base_url", "http://localhost:1234/v1"))
+        self.lmstudio_key_edit.setText(s.get("lmstudio_api_key", "lm-studio"))
+        self.lmstudio_timeout_spin.setValue(int(s.get("lmstudio_timeout", 600)))
+        self.lmstudio_embeddings_edit.setText(s.get("lmstudio_embeddings_model", ""))
 
         vis = s.get("tabs_visibility", {})
         for key, cb in self.vis_checks.items():
@@ -285,6 +306,10 @@ class SettingsDialog(QDialog):
         s["command_confirm_in_editor"] = self.confirm_cmd_cb.isChecked()
         s["command_default_timeout"] = self.cmd_timeout_spin.value()
         s["command_whitelist"] = self.cmd_whitelist_edit.text().strip()
+        s["lmstudio_base_url"] = self.lmstudio_url_edit.text().strip() or "http://localhost:1234/v1"
+        s["lmstudio_api_key"] = self.lmstudio_key_edit.text().strip() or "lm-studio"
+        s["lmstudio_timeout"] = self.lmstudio_timeout_spin.value()
+        s["lmstudio_embeddings_model"] = self.lmstudio_embeddings_edit.text().strip()
 
         s["tabs_visibility"] = {key: cb.isChecked() for key, cb in self.vis_checks.items()}
 

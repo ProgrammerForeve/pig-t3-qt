@@ -180,7 +180,19 @@ class PlanTab(QWidget):
 
         exec_layout.addWidget(QLabel("Модель:"))
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["None", "BomjAPI", "Web: Gemini", "Web: DeepSeek"])
+        base_models = ["None", "BomjAPI", "Web: Gemini", "Web: DeepSeek"]
+        try:
+            from ..workers.lmstudio_models_worker import (
+                get_cached_models as get_lmstudio_cached,
+            )
+
+            for m in get_lmstudio_cached(self.settings):
+                name = f"LM Studio: {m}"
+                if name not in base_models:
+                    base_models.append(name)
+        except Exception as e:
+            log.warning("LM Studio models cache read failed: %s", e)
+        self.model_combo.addItems(base_models)
         exec_layout.addWidget(self.model_combo)
 
         self.cb_auto_apply = QCheckBox("Авто-применение")
