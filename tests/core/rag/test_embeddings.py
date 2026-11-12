@@ -12,6 +12,25 @@ from PIG_T3.core.rag.embeddings import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _mock_lmstudio_unavailable(monkeypatch):
+    """По умолчанию LM Studio недоступен в тестах C2.
+
+    C7a добавил LMStudioEmbeddings в цепочку auto: Ollama → LM Studio
+    → ST. Старые тесты мокали только Ollama и ST. Без этого мока
+    is_available() делает реальный HTTP к localhost:1234.
+    Тесты в test_embeddings_lmstudio.py явно мокают LM Studio в
+    каждом тесте — этот autouse их не касается (отдельный файл).
+    """
+    from PIG_T3.core.rag.embeddings import LMStudioEmbeddings
+
+    monkeypatch.setattr(
+        LMStudioEmbeddings,
+        "is_available",
+        staticmethod(lambda *a, **kw: False),
+    )
+
+
 class _FakeResponse:
     def __init__(self, json_data, status=200):
         self._json = json_data
