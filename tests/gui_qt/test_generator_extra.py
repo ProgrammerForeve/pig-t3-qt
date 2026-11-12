@@ -93,3 +93,62 @@ def test_on_optimization_error(tab):
 def test_on_optimization_cancelled(tab):
     tab._on_optimization_cancelled()
     assert "отмен" in tab.status_label.text().lower()
+
+
+# ---------- C7 follow-up: ported from test_misc_coverage.py ----------
+
+
+def test_format_number_small():
+    from PIG_T3.gui_qt.tabs.generator import GeneratorTab
+
+    assert GeneratorTab._format_number(42) == "42"
+
+
+def test_format_number_k():
+    from PIG_T3.gui_qt.tabs.generator import GeneratorTab
+
+    assert GeneratorTab._format_number(1200) == "1.2K"
+    assert GeneratorTab._format_number(45_678) == "45.68K"
+
+
+def test_format_number_m():
+    from PIG_T3.gui_qt.tabs.generator import GeneratorTab
+
+    assert GeneratorTab._format_number(1_500_000) == "1.5M"
+
+
+def test_estimate_total_tokens_empty(qtbot, tmp_path):
+    from PIG_T3.gui_qt.tabs.generator import GeneratorTab
+
+    tab = GeneratorTab(
+        {
+            "root_folder": str(tmp_path),
+            "extensions": ".py",
+            "ignore_list": "",
+        }
+    )
+    qtbot.addWidget(tab)
+    assert tab._estimate_total_tokens() == 1000
+
+
+def test_refresh_tree_filters_by_clean_extensions(qtbot, tmp_path):
+    from PySide6.QtCore import QModelIndex
+
+    from PIG_T3.gui_qt.tabs.generator import GeneratorTab
+
+    (tmp_path / "a.py").write_text("x")
+    (tmp_path / "b.txt").write_text("y")
+    tab = GeneratorTab(
+        {
+            "root_folder": str(tmp_path),
+            "extensions": " .py , .md , ",
+            "ignore_list": "",
+        }
+    )
+    qtbot.addWidget(tab)
+    names = {
+        tab.tree_model.data(tab.tree_model.index(i, 0, QModelIndex()))
+        for i in range(tab.tree_model.rowCount(QModelIndex()))
+    }
+    assert "a.py" in names
+    assert "b.txt" not in names

@@ -120,3 +120,36 @@ def test_close_event_stops_workers(window, qtbot, monkeypatch):
     assert "editor" in called
     assert "plan" in called
     assert "quality" in called
+
+
+# ---------- C7 follow-up: ported from test_misc_coverage.py ----------
+
+
+def test_get_version_fallback(qtbot, tmp_path, monkeypatch):
+    """importlib.metadata.version падает → 'v?.?.?'."""
+    from PIG_T3.config import ConfigManager
+    from PIG_T3.gui_qt import main_window as mw
+
+    def _fail(name):
+        raise Exception("not installed")
+
+    monkeypatch.setattr(mw.metadata, "version", _fail)
+    cfg = tmp_path / "app_config.json"
+    config = ConfigManager()
+    monkeypatch.setattr(config, "config_file", str(cfg))
+    w = mw.MainWindow(
+        config,
+        {
+            "recent_projects": [],
+            "tabs_visibility": {
+                "generator": True,
+                "info": True,
+                "editor": True,
+                "plan": True,
+                "quality": True,
+            },
+            "theme": "dark",
+        },
+    )
+    qtbot.addWidget(w)
+    assert w._get_version() == "v?.?.?"

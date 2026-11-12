@@ -94,3 +94,28 @@ def test_on_redo_after_undo(qtbot, tab, tmp_path):
 def test_undo_redo_buttons_state(tab):
     assert not tab.btn_undo.isEnabled()
     assert not tab.btn_redo.isEnabled()
+
+
+# ---------- C7 follow-up: ported from test_misc_coverage.py ----------
+
+
+def test_on_undo_redo_done_with_history(tab):
+    tab.history_stack = [
+        {
+            "id": "x",
+            "paths": [],
+            "llm_text": '[{"action":"delete","path":"a.py"}]',
+        }
+    ]
+    tab._on_undo_redo_done("Изменения отменены")
+    assert "delete" in tab.editor_text.toPlainText()
+    assert "Валидный JSON" in tab.status_label.text()
+
+
+def test_on_undo_redo_done_empty_stacks(tab):
+    tab._on_undo_redo_done("ok")
+
+
+def test_on_apply_error_sets_status(tab):
+    tab._on_apply_error("boom")
+    assert "boom" in tab.status_label.text()

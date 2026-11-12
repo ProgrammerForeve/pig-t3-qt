@@ -75,19 +75,7 @@ jobs:
 
       - name: Run tests (Linux, before build)
         if: runner.os == 'Linux'
-        # test_misc_coverage.py crashes with SIGABRT only when run
-        # after 600+ other tests (Qt wrapper accumulation, see
-        # T-107 follow-up). Running it in a separate pytest process
-        # gives a fresh QApplication and no contamination.
-        run: |
-          uv run pytest tests/ -q --timeout=60 --timeout-method=thread \
-            --ignore=tests/gui_qt/test_misc_coverage.py
-
-      - name: Run misc coverage tests (isolated Qt state)
-        if: runner.os == 'Linux'
-        run: |
-          uv run pytest tests/gui_qt/test_misc_coverage.py -q \
-            --timeout=60 --timeout-method=thread
+        run: uv run pytest tests/ -q --timeout=60 --timeout-method=thread
 
       - name: Build executable
         run: uv run pyinstaller pig_t3.spec --noconfirm
