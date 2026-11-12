@@ -92,6 +92,12 @@ class GeneratorTab(QWidget):
         self._gen_worker: GenerateWorker | None = None
         self._watcher = FileWatcher(debounce_ms=1500, parent=self)
         self._watcher.changes_detected.connect(self._on_files_changed)
+        # FIX crash: счётчик для idempotent pause/resume (Editor зовёт
+        # pause из _on_preview и _on_apply, resume — из cleanup'ов).
+        self._watcher_pause_count: int = 0
+        # FIX segfault: пауза watcher вокруг Editor apply/undo/redo
+        # и защита от refresh во время модальных диалогов.
+        self._watcher_paused: bool = False
         self._opt_thread: QThread | None = None
         self._opt_worker: OptimizeWorker | None = None
 
@@ -117,6 +123,8 @@ class GeneratorTab(QWidget):
         self._connect_signals()
         self.refresh_tree()
         self._refresh_recent_menu()
+        if self.cb_sort_by_size.isChecked():
+            self.tree_model.set_sort_mode("size")
 
         # Restore unchecked synchronously — set_unchecked_paths only
         # emits dataChanged, no persistent indices, safe right after
@@ -172,7 +180,14 @@ class GeneratorTab(QWidget):
 
         self.ext_edit = QLineEdit()
         self.output_edit = QLineEdit()
-        fields_layout.addWidget(self.ext_edit, 1, 0)
+        self.btn_all_ext = QPushButton("Все")
+        self.btn_all_ext.setToolTip("Собрать все уникальные расширения из проекта и подставить в поле")
+        self.btn_all_ext.setMaximumWidth(60)
+        ext_row = QHBoxLayout()
+        ext_row.setContentsMargins(0, 0, 0, 0)
+        ext_row.addWidget(self.ext_edit, 1)
+        ext_row.addWidget(self.btn_all_ext)
+        fields_layout.addLayout(ext_row, 1, 0)
         fields_layout.addWidget(self.output_edit, 1, 1)
         fields_layout.setColumnStretch(0, 1)
         fields_layout.setColumnStretch(1, 1)
@@ -194,17 +209,28 @@ class GeneratorTab(QWidget):
         layout.addWidget(self.options_toggle)
 
         self.options_widget = QWidget()
-        options_layout = QVBoxLayout(self.options_widget)
-        options_layout.setContentsMargins(20, 0, 0, 0)
-
+        options_grid = QGridLayout(self.options_widget)
+        options_grid.setContentsMargins(20, 0, 0, 0)
+        options_grid.setHorizontalSpacing(20)
+        options_grid.setVerticalSpacing(2)
         self.cb_include_empty = QCheckBox("Включить в отчёт пустые папки")
         self.cb_add_edit_prompt = QCheckBox("Добавить инструкцию для AI (JSON Format)")
         self.cb_include_plan = QCheckBox("Добавить текущий план к отчёту")
         self.cb_line_numbers = QCheckBox("Нумеровать строки (для точного редактирования)")
         self.cb_auto_copy = QCheckBox("Авто-копировать ФАЙЛ в буфер (для вставки в чат)")
+        self.cb_sort_by_size = QCheckBox("🔽 Сортировать по размеру (большие сверху)")
+        self.cb_sort_by_size.setToolTip(
+            "Перестроить дерево по размеру файлов/папок и показать размеры. "
+            "Влияет на визуализацию; содержимое отчёта не меняется."
+        )
 
-        for cb in self._checkboxes():
-            options_layout.addWidget(cb)
+        _all_cbs = [*list(self._checkboxes()), self.cb_sort_by_size]
+        for _i, _cb in enumerate(_all_cbs):
+            _cb.setFixedHeight(24)
+            options_grid.addWidget(_cb, _i // 3, _i % 3)
+
+        self.options_widget.setFixedHeight(80)
+        self.options_widget.setStyleSheet("QCheckBox { font-size: 9pt; }")
         layout.addWidget(self.options_widget)
 
         # --- Дерево проекта (T-105) ---
@@ -236,6 +262,8 @@ class GeneratorTab(QWidget):
 
         self.tree_model = ProjectTreeModel("", [])
         self.tree_view.setModel(self.tree_model)
+        # Issue 4 (P2): колонка размеров — setup после setModel.
+        self.tree_view.setup_size_column()
         layout.addWidget(self.tree_view, 1)
 
         # --- Панель генерации (T-107) ---
@@ -279,15 +307,18 @@ class GeneratorTab(QWidget):
         self.cb_include_plan.setChecked(settings.get("include_plan", False))
         self.cb_line_numbers.setChecked(settings.get("line_numbers", False))
         self.cb_auto_copy.setChecked(settings.get("auto_copy_file", False))
+        self.cb_sort_by_size.setChecked(settings.get("sort_by_size", False))
 
     def _connect_signals(self) -> None:
         self.btn_browse.clicked.connect(self.browse_folder)
+        self.btn_all_ext.clicked.connect(self._on_all_ext_clicked)
         self.recent_menu.project_selected.connect(self._on_recent_selected)
         self.recent_menu.recent_cleared.connect(self._on_recent_cleared)
         self.btn_auto.clicked.connect(self.auto_set_folder)
         self.btn_refresh_tree.clicked.connect(self.refresh_tree)
         self.btn_optimize.clicked.connect(self.open_optimization_dialog)
         self.cb_select_all.clicked.connect(self._on_select_all_clicked)
+        self.cb_sort_by_size.toggled.connect(self._on_sort_by_size_toggled)
         self.tree_model.checkStateChanged.connect(self._sync_select_all_state)
 
         for edit in (self.path_edit, self.ext_edit, self.ignore_edit, self.output_edit):
@@ -301,6 +332,10 @@ class GeneratorTab(QWidget):
         self._refresh_timer.start()
 
     def _on_checkbox_toggled(self, _checked: bool) -> None:
+        self.settings_changed.emit()
+
+    def _on_sort_by_size_toggled(self, checked: bool) -> None:
+        self.tree_model.set_sort_mode("size" if checked else "name")
         self.settings_changed.emit()
 
     def _on_options_toggled(self, checked: bool) -> None:
@@ -322,31 +357,51 @@ class GeneratorTab(QWidget):
             )
 
     def _estimate_total_tokens(self) -> int:
-        """Оценка размера контекста: сумма (размер .py / 4) по дереву.
+        """Issue 4: (размер дерева + системный промт) / token_bytes.
 
-        Как в legacy: обходим все .py-файлы модели, не только
-        отмеченные. Fallback — 1000 токенов на пустом дереве.
+        Считаем размер ВСЕХ файлов дерева (не только .py, как legacy) —
+        точнее для смешанных проектов. Системный промт добавляется,
+        только если включён add_edit_prompt. Пустое дерево → 1000.
         """
-        total = 0
+        token_bytes = int(self.settings.get("opt_token_bytes_per_token", 4) or 4)
+        if token_bytes <= 0:
+            token_bytes = 4
+        total_bytes = 0
+        tree_bytes = self.tree_model.checked_size_bytes()
+        if tree_bytes:
+            total_bytes += tree_bytes
+        if self.cb_add_edit_prompt.isChecked():
+            total_bytes += self._system_prompt_bytes()
+        if total_bytes == 0:
+            return 1000
+        return max(1, total_bytes // token_bytes)
 
-        def walk(index: QModelIndex) -> None:
-            nonlocal total
-            if not index.isValid():
-                return
-            if self.tree_model.is_dir(index):
-                for i in range(self.tree_model.rowCount(index)):
-                    walk(self.tree_model.index(i, 0, index))
-                return
-            rel = self.tree_model.relative_path(index)
-            if not rel.endswith(".py"):
-                return
-            full = os.path.join(self.tree_model.root_path, rel)
-            with contextlib.suppress(OSError):
-                total += os.path.getsize(full) // 4
+    def _system_prompt_bytes(self) -> int:
+        """Issue 4: размер системного промта (add_edit_prompt) в байтах."""
+        import io
 
-        for i in range(self.tree_model.rowCount(QModelIndex())):
-            walk(self.tree_model.index(i, 0, QModelIndex()))
-        return total or 1000
+        try:
+            from ...core.agent_context import (
+                collect_environment,
+                format_environment_block,
+            )
+
+            env_block = format_environment_block(collect_environment(self.path_edit.text().strip() or "."))
+        except Exception:
+            env_block = ""
+        buf = io.StringIO()
+        try:
+            self.analyzer._write_patching_instructions(
+                buf,
+                line_numbers=self.cb_line_numbers.isChecked(),
+                use_sharp_indent=self.settings.get("use_sharp_indent", False),
+                env_block=env_block,
+                custom_system_prompt=self.settings.get("custom_system_prompt", "") or "",
+            )
+        except Exception as e:
+            log.warning("_system_prompt_bytes failed: %s", e)
+            return 0
+        return len(buf.getvalue().encode("utf-8"))
 
     # ---------- Optimization worker (T-110) ----------
 
@@ -535,6 +590,7 @@ class GeneratorTab(QWidget):
             "include_plan": self.cb_include_plan.isChecked(),
             "line_numbers": self.cb_line_numbers.isChecked(),
             "auto_copy_file": self.cb_auto_copy.isChecked(),
+            "sort_by_size": self.cb_sort_by_size.isChecked(),
         }
 
     def commit_recent_projects(self) -> None:
@@ -628,11 +684,74 @@ class GeneratorTab(QWidget):
         self._watcher.start(target)
 
     def _on_files_changed(self) -> None:
-        """Debounced event от watcher — пересобрать дерево, если не заняты."""
+        """Debounced event от watcher — пересобрать дерево, если не заняты.
+
+        Защита от segfault (см. /tmp/pig_crash.log, project_tree.py:275):
+        если открыт модальный диалог (DiffDialog/SettingsDialog/и т.п.),
+        event loop обрабатывает paint-события параллельно с dataChanged.
+        emit на только что уничтоженных C++ QTreeView-узлах даёт SIGSEGV.
+        Поэтому: pause_file_watcher() во время apply/undo/redo И
+        activeModalWidget() guard для любых модальных диалогов.
+        """
         if not self.settings.get("auto_refresh_tree", True):
             return
         if self._gen_thread is not None or self._opt_thread is not None:
             return  # не мешаем активной операции
+        if getattr(self, "_watcher_paused", False):
+            return  # явно приостановлен (Editor apply/undo/redo)
+        try:
+            from PySide6.QtWidgets import QApplication
+
+            if QApplication.activeModalWidget() is not None:
+                return  # модальный диалог открыт — пропускаем refresh
+        except Exception as e:
+            log.debug("activeModalWidget check failed: %s", e)
+        self.refresh_tree()
+
+    def pause_file_watcher(self) -> None:
+        """FIX segfault: приостановить refresh по FileWatcher."""
+        try:
+            from shiboken6 import isValid
+
+            if not isValid(self):
+                return
+            if getattr(self, "_watcher", None) is None or not isValid(self._watcher):
+                return
+        except Exception:
+            return
+        self._watcher_paused = True
+        self._watcher_pause_count = getattr(self, "_watcher_pause_count", 0) + 1
+        if self._watcher_pause_count == 1 and self._watcher.is_running():
+            try:
+                self._watcher.stop()
+            except Exception as e:
+                log.warning("pause_file_watcher stop: %s", e)
+
+    def resume_file_watcher(self) -> None:
+        """FIX segfault: возобновить + один refresh, если были изменения."""
+        try:
+            from shiboken6 import isValid
+
+            if not isValid(self):
+                return
+            if getattr(self, "_watcher", None) is None or not isValid(self._watcher):
+                return
+        except Exception:
+            return
+        count = getattr(self, "_watcher_pause_count", 0)
+        if count <= 0:
+            return  # not paused — no-op (защита от двойного resume)
+        new_count = count - 1
+        self._watcher_pause_count = new_count
+        if new_count > 0:
+            return
+        self._watcher_paused = False
+        target = self.tree_model.root_path
+        if target and self.settings.get("auto_refresh_tree", True):
+            try:
+                self._watcher.start(target)
+            except Exception as e:
+                log.warning("resume_file_watcher start: %s", e)
         self.refresh_tree()
 
     def set_tree_data(self, files: list[tuple[str, str]]) -> None:
@@ -875,6 +994,33 @@ class GeneratorTab(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Выберите папку проекта", self.path_edit.text())
         if folder:
             self.path_edit.setText(folder)
+
+    def _on_all_ext_clicked(self) -> None:
+        """Собрать все уникальные расширения файлов в проекте
+        (с учётом ignore_list) и записать в ext_edit."""
+        root = self.path_edit.text().strip()
+        if not root or not os.path.isdir(root):
+            self.status_label.setText("❌ Папка проекта не существует")
+            return
+        raw_ignore = self.ignore_edit.text().strip()
+        ignored = {x.strip() for x in raw_ignore.split(",") if x.strip()}
+        exts: set[str] = set()
+        try:
+            for _dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d not in ignored and not any(ign in d for ign in ignored)]
+                for f in filenames:
+                    ext = os.path.splitext(f)[1]
+                    if ext:
+                        exts.add(ext.lower())
+        except OSError as e:
+            log.warning("all_ext walk failed: %s", e)
+            self.status_label.setText(f"⚠️ Ошибка обхода: {e}")
+            return
+        if not exts:
+            self.status_label.setText("⚠️ Расширения не найдены")
+            return
+        self.ext_edit.setText(", ".join(sorted(exts)))
+        self.status_label.setText(f"🔍 Найдено расширений: {len(exts)}")
 
     def auto_set_folder(self) -> None:
         if getattr(sys, "frozen", False):

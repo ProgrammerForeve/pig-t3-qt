@@ -161,6 +161,27 @@ def compute_diffs(llm_text: str, root_folder: str) -> list[FileDiff]:
             )
         )
         diffs.append(FileDiff(path=p, status=status, unified_diff="".join(lines)))
+
+    # ISSUE 6: патч содержит edit, но apply_llm_changes в temp не дал
+    # изменений (replace_text не нашёл фрагмент, replace_lines вне
+    # диапазона, find == replace). Показываем причину, а не «Нет изменений».
+    if not diffs:
+        edit_paths = [
+            a.get("path") for a in data if isinstance(a, dict) and a.get("action") == "edit" and a.get("path")
+        ]
+        if edit_paths:
+            hint = (
+                "⚠️ Патч не дал изменений для этого файла.\n"
+                "Возможные причины:\n"
+                "- replace_text: фрагмент 'find' не найден даже с "
+                "whitespace-flexible fallback.\n"
+                "- replace_text: 'find' и 'replace' идентичны.\n"
+                "- replace_lines: start/end вне диапазона файла.\n"
+                "- edit: операция применилась, но результат совпал с исходником.\n"
+            )
+            for p in edit_paths:
+                if p in paths:
+                    diffs.append(FileDiff(path=p, status="failed", unified_diff=hint))
     return diffs
 
 

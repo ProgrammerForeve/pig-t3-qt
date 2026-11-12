@@ -77,3 +77,24 @@ def test_cmd_save(qtbot):
     assert out["allow_command_execution"] is True
     assert out["command_whitelist"] == "git"
     assert out["command_default_timeout"] == 60
+
+
+def test_shell_ops_cb_exists(qtbot):
+    dlg = SettingsDialog(_settings())
+    qtbot.addWidget(dlg)
+    assert hasattr(dlg, "allow_shell_ops_cb")
+    assert dlg.allow_shell_ops_cb.isChecked() is False  # default off
+
+
+def test_shell_ops_cb_populate(qtbot):
+    dlg = SettingsDialog(_settings(command_allow_shell_operators=True))
+    qtbot.addWidget(dlg)
+    assert dlg.allow_shell_ops_cb.isChecked() is True
+
+
+def test_shell_ops_cb_save(qtbot):
+    dlg = SettingsDialog(_settings())
+    qtbot.addWidget(dlg)
+    dlg.allow_shell_ops_cb.setChecked(True)
+    dlg._on_save()
+    assert dlg.get_updated_settings()["command_allow_shell_operators"] is True

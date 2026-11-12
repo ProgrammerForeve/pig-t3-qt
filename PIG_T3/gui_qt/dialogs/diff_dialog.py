@@ -23,6 +23,7 @@ _STATUS_ICON = {
     "created": "➕",
     "modified": "✏️",
     "deleted": "🗑️",
+    "failed": "⚠️",
 }
 
 
@@ -106,6 +107,14 @@ class DiffDialog(QDialog):
 
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_apply.clicked.connect(self.accept)
+
+        # P2 (issue 6): если все diffs — failed и команд нет, применять
+        # нечего. Disable Apply, чтобы пользователь не нажал вхолостую.
+        if self._diffs and not self._commands and all(d.status == "failed" for d in self._diffs):
+            self.btn_apply.setEnabled(False)
+            self.btn_apply.setToolTip(
+                "Все изменения помечены как failed — применять нечего. См. подробности в правой панели."
+            )
 
     def _on_file_selected(self, row: int) -> None:
         if row < 0:

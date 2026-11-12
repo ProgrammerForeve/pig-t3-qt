@@ -38,7 +38,12 @@ class ProjectAnalyzer:
         return "\n".join(lines)
 
     def _write_patching_instructions(
-        self, f, line_numbers=False, use_sharp_indent=False, env_block=""
+        self,
+        f,
+        line_numbers=False,
+        use_sharp_indent=False,
+        env_block="",
+        custom_system_prompt="",
     ):
         instructions = [
             "\n" + "=" * 80,
@@ -52,6 +57,7 @@ class ProjectAnalyzer:
             "1. EVERY 'create' action MUST contain a 'content' field with the FULL file content. Do NOT create empty files and then edit them.",
             "2. EVERY 'edit' action MUST contain an 'operations' array. PREFER 'replace_lines' over 'replace_text'.",
             "3. 'replace_text' is DISCOURAGED. Use it ONLY if line numbers are not available. It requires exact string matching including spaces and indentation.",
+            "3a. 'replace_text.find' also supports /pattern/flags regex syntax (e.g. '/def\\s+foo\\(.*\\):/im'). Use it when you need to match a variable number of whitespace or wildcard content. Flags: i (ignorecase), m (multiline), s (dotall), x (verbose).",
             "4. EVERY action except 'update_settings' and 'mark_step_completed' MUST include a 'path' field with a relative file path.",
             "5. When line numbers are provided (they are!), ALWAYS use 'replace_lines' with correct 'start' and 'end'.",
             "6. Do NOT include unchanged neighboring lines in 'content' of 'replace_lines' — that causes duplication.",
@@ -147,6 +153,17 @@ class ProjectAnalyzer:
         if env_block:
             instructions.append(env_block)
             instructions.append("")
+
+        if custom_system_prompt and custom_system_prompt.strip():
+            instructions.extend(
+                [
+                    "=" * 80,
+                    "USER SYSTEM PROMPT (дополнительные инструкции от пользователя):",
+                    "=" * 80,
+                    custom_system_prompt.strip(),
+                    "",
+                ]
+            )
 
         instructions.extend([
             "🛑 ANTI-DESTRUCTION SHIELD (CRITICAL):",
@@ -391,8 +408,15 @@ class ProjectAnalyzer:
                         collect_environment(root_folder)
                     )
                     self._write_patching_instructions(
-                        f, line_numbers, use_sharp_indent, env_block
-                )
+                        f,
+                        line_numbers,
+                        use_sharp_indent,
+                        env_block,
+                        custom_system_prompt=config.get(
+                            "custom_system_prompt", ""
+                        )
+                        or "",
+                    )
         except _Cancelled:
             try:
                 os.remove(output_file)

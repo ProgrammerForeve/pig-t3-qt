@@ -27,6 +27,7 @@ def model(files):
 def view(qtbot, model):
     v = ProjectTreeView()
     v.setModel(model)
+    v.setup_size_column()
     qtbot.addWidget(v)
     v.resize(500, 400)
     v.show()
@@ -121,3 +122,33 @@ def test_model_reset_data_empty():
     m = ProjectTreeModel("/proj", [("/proj/a.py", ".py")])
     m.reset_data([], "/proj")
     assert m.rowCount(QModelIndex()) == 0
+
+
+# ---------- Issue 4 (P2): колонка размеров ----------
+
+
+def test_header_visible(view):
+    assert view.isHeaderHidden() is False
+
+
+def test_size_column_width_fixed(view):
+    from PySide6.QtWidgets import QHeaderView
+
+    header = view.header()
+    assert header.sectionResizeMode(1) == QHeaderView.ResizeMode.Fixed
+    # Точная ширина зависит от layout-timing Qt/OS — проверяем диапазон
+    assert 40 <= view.columnWidth(1) <= 200
+
+
+def test_click_on_size_column_does_not_toggle(view, model, qtbot):
+    idx = model.find_index("main.py")
+    # rect во viewport для колонки 1
+    rect = view.visualRect(model.index(idx.row(), 1, idx.parent()))
+    if rect.isValid() and rect.width() > 0:
+        qtbot.mouseClick(
+            view.viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=rect.center(),
+        )
+    # чекбокс не должен измениться
+    assert model.data(idx, Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked

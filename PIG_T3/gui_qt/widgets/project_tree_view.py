@@ -10,7 +10,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QModelIndex, QPoint, Qt
-from PySide6.QtWidgets import QStyledItemDelegate, QTreeView
+from PySide6.QtWidgets import (
+    QHeaderView,
+    QStyledItemDelegate,
+    QTreeView,
+)
 
 _DEFAULT_ROW_HEIGHT = 22
 
@@ -48,14 +52,38 @@ class _RowHeightDelegate(QStyledItemDelegate):
 class ProjectTreeView(QTreeView):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setHeaderHidden(True)
+        # Issue 4 (P2): вторая колонка — размеры. Заголовки видны.
+        self.setHeaderHidden(False)
         self.setUniformRowHeights(True)
         self.setSelectionMode(QTreeView.SelectionMode.SingleSelection)
         self.setEditTriggers(QTreeView.EditTrigger.NoEditTriggers)
 
+        # Ширина колонок — в _apply_column_widths(), вызов после setModel.
+
         self._row_height = _DEFAULT_ROW_HEIGHT
         self._row_delegate = _RowHeightDelegate(self._row_height, self)
         self.setItemDelegate(self._row_delegate)
+
+    def setup_size_column(self) -> None:
+        """Настроить колонку размеров: stretch для 0, fixed 90px для 1.
+
+        Вызывать ПОСЛЕ setModel() — до присоединения модели Qt
+        игнорирует setColumnWidth. Не override'им setModel (SIGSEGV
+        при teardown на test_capture_tree_state_returns_dict).
+        """
+        try:
+            from shiboken6 import isValid
+
+            if not isValid(self):
+                return
+            header = self.header()
+            if header is not None and isValid(header):
+                header.setStretchLastSection(False)
+                header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+            self.setColumnWidth(1, 90)
+        except Exception:
+            return
 
     def apply_row_height(self, height: int) -> None:
         """Установить высоту строки (px). Игнорирует невалидные значения.
@@ -96,6 +124,9 @@ class ProjectTreeView(QTreeView):
         """Программно переключить чекбокс. Возвращает True, если удалось."""
         if not index.isValid():
             return False
+        if index.column() != 0:
+            # Issue 4 (P2): в колонке размеров чекбокса нет.
+            return False
         model = self.model()
         if model is None:
             return False
@@ -109,7 +140,13 @@ class ProjectTreeView(QTreeView):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             index = self.indexAt(pos)
-            if index.isValid() and not self._is_on_branch_indicator(pos, index) and self.toggle_check_for_index(index):
-                event.accept()
-                return
+            if index.isValid():
+                # Issue 4 (P2): клик в колонке размеров — обычное выделение,
+                # не toggle (иначе клик по '12.3 KB' снимал бы чекбокс).
+                if index.column() != 0:
+                    super().mousePressEvent(event)
+                    return
+                if not self._is_on_branch_indicator(pos, index) and self.toggle_check_for_index(index):
+                    event.accept()
+                    return
         super().mousePressEvent(event)

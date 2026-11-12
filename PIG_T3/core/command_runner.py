@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,14 +62,33 @@ def parse_whitelist(raw: str | list[str] | None) -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
-def _is_whitelisted(command: str, whitelist: list[str]) -> bool:
+# P0: shell-метасимволы, несовместимые с моделью «один whitelisted токен».
+_DANGEROUS_SHELL = re.compile(r"[;&|<>`]|\$\(|\$\{")
+
+
+def _is_whitelisted(
+    command: str,
+    whitelist: list[str],
+    allow_shell_operators: bool = False,
+) -> bool:
     if not whitelist:
         return True
     stripped = command.strip()
     if not stripped:
         return False
-    first = stripped.split()[0]
-    return first in whitelist
+    # P0 (TASKS.md): при непустом whitelist запрещаем составные команды.
+    # P2 (TASKS.md): allow_shell_operators=True возвращает legacy-поведение
+    # (проверяем только первый токен) — для случаев, когда пользователь
+    # осознанно хочет `pytest ... | tail` или `git add -A && git commit`.
+    if not allow_shell_operators and _DANGEROUS_SHELL.search(stripped):
+        return False
+    try:
+        tokens = shlex.split(stripped)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    return tokens[0] in whitelist
 
 
 def _truncate(text: str, limit: int = _MAX_OUTPUT_BYTES) -> tuple[str, bool]:
@@ -124,6 +145,7 @@ def run_command(
     timeout: int = _DEFAULT_TIMEOUT,
     output_path: str | None = None,
     whitelist: list[str] | None = None,
+    allow_shell_operators: bool = False,
 ) -> CommandResult:
     """Выполнить shell-команду в cwd. Никогда не бросает — возвращает
     CommandResult с returncode=-1 при ошибках спавна/таймауте."""
@@ -135,7 +157,9 @@ def run_command(
             stderr="empty command",
         )
 
-    if whitelist and not _is_whitelisted(command, whitelist):
+    if whitelist and not _is_whitelisted(
+        command, whitelist, allow_shell_operators=allow_shell_operators
+    ):
         raise CommandWhitelistError(
             f"Команда {command!r} не входит в whitelist {whitelist}"
         )

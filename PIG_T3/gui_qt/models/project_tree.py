@@ -39,6 +39,8 @@ class TreeNode:
     parent: TreeNode | None = None
     children: list[TreeNode] = field(default_factory=list)
     check_state: Qt.CheckState = Qt.CheckState.Checked
+    # Issue 4: размер файла (байт) или суммарный размер папки.
+    size_bytes: int = 0
     # Внутренний ID для QModelIndex.internalId(); 0 = ещё не назначен.
     _qt_id: int = 0
 
@@ -56,11 +58,13 @@ class ProjectTreeModel(QAbstractItemModel):
     ):
         super().__init__(parent)
         self.root_path = os.path.abspath(root_path)
+        self._sort_mode: str = "name"  # Issue 4: "name" | "size"
         self._root = TreeNode(name="", path=self.root_path, is_dir=True)
         self._id_to_node: dict[int, TreeNode] = {}
         self._next_id = 1
         self._assign_id(self._root)
         self._build_tree(files)
+        self._compute_sizes(self._root)
         self._recompute_all(self._root)
 
     # ---------- Node registry ----------
@@ -114,9 +118,77 @@ class ProjectTreeModel(QAbstractItemModel):
         self._sort_recursive(self._root)
 
     def _sort_recursive(self, node: TreeNode) -> None:
-        node.children.sort(key=lambda n: (0 if n.is_dir else 1, n.name.lower()))
+        if self._sort_mode == "size":
+            node.children.sort(
+                key=lambda n: (
+                    0 if n.is_dir else 1,
+                    -n.size_bytes,
+                    n.name.lower(),
+                )
+            )
+        else:
+            node.children.sort(key=lambda n: (0 if n.is_dir else 1, n.name.lower()))
         for child in node.children:
             self._sort_recursive(child)
+
+    def _compute_sizes(self, node: TreeNode) -> int:
+        """Issue 4: рекурсивно вычислить size_bytes."""
+        if not node.is_dir:
+            try:
+                size = os.path.getsize(node.path)
+            except OSError:
+                size = 0
+            node.size_bytes = size
+            return size
+        total = 0
+        for child in node.children:
+            total += self._compute_sizes(child)
+        node.size_bytes = total
+        return total
+
+    @staticmethod
+    def _format_size(n: int) -> str:
+        if n >= 1024 * 1024:
+            return f"{n / (1024 * 1024):.1f} MB"
+        if n >= 1024:
+            return f"{n / 1024:.1f} KB"
+        return f"{n} B"
+
+    def total_size_bytes(self) -> int:
+        """Issue 4: суммарный размер всех файлов дерева."""
+        return self._root.size_bytes
+
+    def checked_size_bytes(self) -> int:
+        """Issue 4: суммарный размер только отмеченных файлов.
+
+        Папки не считаются отдельно — обход идёт по листьям, у
+        каждого листа size_bytes = размер файла с диска.
+        """
+        total = 0
+
+        def walk(node: TreeNode) -> None:
+            nonlocal total
+            if not node.is_dir:
+                if node.check_state == Qt.CheckState.Checked:
+                    total += node.size_bytes
+                return
+            for child in node.children:
+                walk(child)
+
+        for child in self._root.children:
+            walk(child)
+        return total
+
+    def set_sort_mode(self, mode: str) -> None:
+        """Issue 4: переключить сортировку 'name' ↔ 'size'."""
+        if mode not in ("name", "size"):
+            return
+        if self._sort_mode == mode:
+            return
+        self._sort_mode = mode
+        self.layoutAboutToBeChanged.emit()
+        self._sort_recursive(self._root)
+        self.layoutChanged.emit()
 
     def _recompute_all(self, node: TreeNode) -> None:
         for child in node.children:
@@ -200,17 +272,49 @@ class ProjectTreeModel(QAbstractItemModel):
         return len(node.children)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
-        return 1
+        return 2
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
         node = self._node_from_index(index)
         if node is None:
             return None
+        column = index.column()
         if role == Qt.ItemDataRole.DisplayRole:
+            if node is self._root:
+                return None
+            if column == 1:
+                # Issue 4 (P2): отдельная колонка размеров.
+                return self._format_size(node.size_bytes)
             return node.name
-        if role == Qt.ItemDataRole.CheckStateRole:
+        if role == Qt.ItemDataRole.CheckStateRole and column == 0:
             return node.check_state
+        if role == Qt.ItemDataRole.TextAlignmentRole and column == 1:
+            return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if role == Qt.ItemDataRole.ToolTipRole and node is not self._root:
+            # Issue 4 (P2): размер + ~токены в tooltip — на любую строку,
+            # вне зависимости от _sort_mode. Папки — суммарный размер.
+            kind = "папка" if node.is_dir else "файл"
+            tokens = max(0, node.size_bytes // 4)
+            return (
+                f"{node.name}\n"
+                f"{kind}, {self._format_size(node.size_bytes)} "
+                f"({node.size_bytes:,} байт)\n"
+                f"≈ {tokens:,} токенов (bytes / 4)"
+            )
         return None
+
+    def headerData(  # type: ignore[override]
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            if section == 0:
+                return "Файл"
+            if section == 1:
+                return "Размер"
+        return super().headerData(section, orientation, role)
 
     def setData(  # type: ignore[override]
         self,
@@ -220,6 +324,8 @@ class ProjectTreeModel(QAbstractItemModel):
     ) -> bool:
         if role != Qt.ItemDataRole.CheckStateRole:
             return False
+        if index.column() != 0:
+            return False  # Issue 4 (P2): в колонке размеров чекбокса нет
         node = self._node_from_index(index)
         if node is None:
             return False
@@ -243,7 +349,10 @@ class ProjectTreeModel(QAbstractItemModel):
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:  # type: ignore[override]
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
-        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable
+        base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.column() == 0:
+            base |= Qt.ItemFlag.ItemIsUserCheckable
+        return base
 
     # ---------- Helpers ----------
 
@@ -355,6 +464,7 @@ class ProjectTreeModel(QAbstractItemModel):
             self._root = TreeNode(name="", path=self.root_path, is_dir=True)
             self._assign_id(self._root)
             self._build_tree(files)
+            self._compute_sizes(self._root)
             self._recompute_all(self._root)
         else:
             self.root_path = ""

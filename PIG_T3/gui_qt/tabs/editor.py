@@ -84,9 +84,17 @@ class EditorTab(QWidget):
     undo_available_changed = Signal(bool)
     redo_available_changed = Signal(bool)
 
-    def __init__(self, settings: dict, parent=None):
+    def __init__(
+        self,
+        settings: dict,
+        parent=None,
+        pause_watcher_cb=None,
+        resume_watcher_cb=None,
+    ):
         super().__init__(parent)
         self.settings = dict(settings)
+        self._pause_watcher_cb = pause_watcher_cb
+        self._resume_watcher_cb = resume_watcher_cb
         self.history_stack: list[dict] = []
         self.redo_stack: list[dict] = []
         self._last_applied_content: str | None = None
@@ -332,8 +340,17 @@ class EditorTab(QWidget):
         if not diffs and not commands:
             _show_info(self, "Просмотр", "Изменений нет.")
             return
-        dlg = DiffDialog(diffs, commands=commands, parent=self)
-        if dlg.exec() == DiffDialog.DialogCode.Accepted:
+        if self._pause_watcher_cb is not None:
+            with contextlib.suppress(Exception):
+                self._pause_watcher_cb()
+        try:
+            dlg = DiffDialog(diffs, commands=commands, parent=self)
+            accepted = dlg.exec() == DiffDialog.DialogCode.Accepted
+        finally:
+            if self._resume_watcher_cb is not None:
+                with contextlib.suppress(Exception):
+                    self._resume_watcher_cb()
+        if accepted:
             self._on_apply()
 
     def _on_paste(self) -> None:
@@ -382,6 +399,9 @@ class EditorTab(QWidget):
         self.btn_apply.setEnabled(False)
         self.btn_apply.setText("Применение...")
 
+        if self._pause_watcher_cb is not None:
+            with contextlib.suppress(Exception):
+                self._pause_watcher_cb()
         self._apply_worker = ApplyWorker(raw, self._current_path, settings=self.settings)
         self._apply_thread = QThread(self)
         self._apply_worker.moveToThread(self._apply_thread)
@@ -418,16 +438,97 @@ class EditorTab(QWidget):
         self.status_label.setText(f"❌ {msg}")
 
     def _show_result_dialog(self, log: str) -> None:
-        from PySide6.QtWidgets import QDialog, QPlainTextEdit, QVBoxLayout
+        """Окно результата патча: лог + полные .pig/cmd/*.log по кнопке."""
+        import os
+        import re as _re
+
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices, QGuiApplication
+        from PySide6.QtWidgets import (
+            QDialog,
+            QFileDialog,
+            QHBoxLayout,
+            QMessageBox,
+            QPlainTextEdit,
+            QPushButton,
+            QVBoxLayout,
+        )
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Результат патча")
-        dlg.resize(700, 500)
+        dlg.resize(1100, 700)
         layout = QVBoxLayout(dlg)
         text = QPlainTextEdit()
         text.setReadOnly(True)
         text.setPlainText(log)
-        layout.addWidget(text)
+        layout.addWidget(text, 1)
+
+        output_paths = _re.findall(r"📄 output:\s*(\S+\.log)", log)
+
+        def _copy_visible() -> None:
+            QGuiApplication.clipboard().setText(text.toPlainText())
+
+        def _copy_all() -> None:
+            parts = [log]
+            base = self._current_path or ""
+            for rel in output_paths:
+                full = os.path.join(base, rel)
+                try:
+                    with open(full, encoding="utf-8", errors="replace") as f:
+                        parts.append(f"\n\n=== {rel} ===\n{f.read()}")
+                except Exception as exc:
+                    parts.append(f"\n\n=== {rel} ===\n(не удалось прочитать: {exc})")
+            QGuiApplication.clipboard().setText("\n".join(parts))
+
+        def _open_last_log() -> None:
+            if not output_paths:
+                return
+            full = os.path.join(self._current_path or "", output_paths[-1])
+            QDesktopServices.openUrl(QUrl.fromLocalFile(full))
+
+        def _save_to_file() -> None:
+            path, _ = QFileDialog.getSaveFileName(
+                dlg,
+                "Сохранить лог",
+                "patch_result.log",
+                "Log files (*.log);;All files (*)",
+            )
+            if path:
+                try:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(text.toPlainText())
+                except OSError as exc:
+                    QMessageBox.warning(dlg, "Ошибка", f"Не удалось сохранить: {exc}")
+
+        btn_row = QHBoxLayout()
+        btn_copy = QPushButton("📋 Копировать")
+        btn_copy.setToolTip("Скопировать видимый лог в буфер обмена")
+        btn_copy.clicked.connect(_copy_visible)
+        btn_row.addWidget(btn_copy)
+
+        if output_paths:
+            btn_copy_all = QPushButton(f"📋 Копировать всё (+{len(output_paths)} лог.)")
+            btn_copy_all.setToolTip("Скопировать лог + полные выводы .pig/cmd/*.log (для вставки в чат с AI)")
+            btn_copy_all.clicked.connect(_copy_all)
+            btn_row.addWidget(btn_copy_all)
+
+            btn_open = QPushButton("📄 Открыть .log")
+            btn_open.setToolTip(output_paths[-1])
+            btn_open.clicked.connect(_open_last_log)
+            btn_row.addWidget(btn_open)
+
+        btn_save = QPushButton("💾 Сохранить в файл")
+        btn_save.setToolTip("Сохранить видимый лог в .log-файл")
+        btn_save.clicked.connect(_save_to_file)
+        btn_row.addWidget(btn_save)
+
+        btn_row.addStretch(1)
+        btn_close = QPushButton("Закрыть")
+        btn_close.setDefault(True)
+        btn_close.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+
         dlg.exec()
         dlg.deleteLater()
 
@@ -451,6 +552,9 @@ class EditorTab(QWidget):
 
     def _start_undo_redo(self, record: dict, action: str) -> None:
         self.btn_apply.setEnabled(False)
+        if self._pause_watcher_cb is not None:
+            with contextlib.suppress(Exception):
+                self._pause_watcher_cb()
         self._undo_worker = UndoRedoWorker(self._current_path, record, action)
         self._undo_thread = QThread(self)
         self._undo_worker.moveToThread(self._undo_thread)
@@ -492,6 +596,9 @@ class EditorTab(QWidget):
                 pass
         self.btn_apply.setEnabled(True)
         self.btn_apply.setText("ПРИМЕНИТЬ ИЗМЕНЕНИЯ")
+        if self._resume_watcher_cb is not None:
+            with contextlib.suppress(Exception):
+                self._resume_watcher_cb()
 
     def _cleanup_undo_thread(self, *_args) -> None:
         thread = self._undo_thread
@@ -504,6 +611,9 @@ class EditorTab(QWidget):
             except RuntimeError:
                 pass
         self.btn_apply.setEnabled(True)
+        if self._resume_watcher_cb is not None:
+            with contextlib.suppress(Exception):
+                self._resume_watcher_cb()
 
     def stop_workers(self) -> None:
         """Остановка для MainWindow.closeEvent."""

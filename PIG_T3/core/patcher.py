@@ -8,11 +8,45 @@ log = logging.getLogger("pig_t3.patcher")
 
 import shutil
 
+def _parse_regex_find(find_str: str) -> tuple[str, int] | None:
+    """'/pattern/flags' → (pattern, flags_int). None если не regex-формат.
+
+    Флаги: g (игнор, no-op), i (IGNORECASE), m (MULTILINE),
+    s (DOTALL), x (VERBOSE), u (UNICODE).
+    """
+    if not find_str or len(find_str) < 3 or not find_str.startswith("/"):
+        return None
+    body = find_str[1:]
+    last = body.rfind("/")
+    if last <= 0:
+        return None
+    pattern = body[:last]
+    flags_str = body[last + 1:]
+    if not all(c in "gimsux" for c in flags_str):
+        return None
+    flags = 0
+    for c in flags_str:
+        if c == "i":
+            flags |= re.IGNORECASE
+        elif c == "m":
+            flags |= re.MULTILINE
+        elif c == "s":
+            flags |= re.DOTALL
+        elif c == "x":
+            flags |= re.VERBOSE
+        elif c == "u":
+            flags |= re.UNICODE
+    return pattern, flags
+
+
 def _build_flexible_pattern(find_str: str) -> "re.Pattern[str]":
     """find_str → regex, где каждая последовательность whitespace
     матчит `\\s+`. Пример: '    def foo():\\n        return 1'
     → 'def\\s+foo\\(\\):\\s+return\\s+1'.
     """
+    # Windows-файлы: нормализуем \r\n → \n, чтобы \s+ не съедал лишнего
+    # и indent-эвристика не путалась (см. _line_indent_at).
+    find_str = find_str.replace("\r\n", "\n").replace("\r", "\n")
     parts = re.split(r"(\s+)", find_str.strip("\n"))
     chunks: list[str] = []
     for p in parts:
@@ -63,7 +97,25 @@ def _apply_replace_text(
     full_text: str, find_str: str, replace_str: str
 ) -> tuple[str, bool, str]:
     """Заменить find_str на replace_str с whitespace-flexible поиском
-    и адаптацией indent. Возвращает (new_text, changed, status)."""
+    и адаптацией indent. Возвращает (new_text, changed, status).
+
+    Уровень 0: явная регулярка /pattern/flags (opt-in).
+    Уровень 1: exact literal.
+    Уровень 2: whitespace-flexible (\s+ для любой группы пробелов).
+    """
+    # Уровень 0: регулярка /pattern/flags
+    parsed = _parse_regex_find(find_str) if find_str else None
+    if parsed is not None:
+        pattern_str, flags = parsed
+        try:
+            regex = re.compile(pattern_str, flags)
+        except re.error as e:
+            return full_text, False, f"invalid regex: {e}"
+        new_text, count = regex.subn(replace_str, full_text)
+        if count > 0:
+            return new_text, True, f"regex ({count} match)"
+        return full_text, False, "regex: 0 matches"
+
     # Уровень 1: exact
     if find_str in full_text:
         return full_text.replace(find_str, replace_str), True, "exact"
@@ -126,6 +178,7 @@ def apply_llm_changes(
     allow_command_execution: bool = False,
     command_whitelist: str | list[str] = "",
     command_default_timeout: int = 120,
+    command_allow_shell_operators: bool = False,
     runner=None,
 ):
     """
@@ -512,6 +565,7 @@ def apply_llm_changes(
                         timeout=timeout,
                         output_path=output_path,
                         whitelist=parse_whitelist(command_whitelist),
+                        allow_shell_operators=command_allow_shell_operators,
                     )
             except Exception as e:  # noqa: BLE001
                 changes_log.append(f"❌ run_command: {e}")
@@ -528,11 +582,49 @@ def apply_llm_changes(
             )
             if result.output_path:
                 changes_log.append(f"   📄 output: {result.output_path}")
-            if not result.ok:
-                preview = (result.stderr or result.stdout or "").strip()
-                preview = preview.replace("\n", " ⏎ ")[:200]
-                if preview:
-                    changes_log.append(f"   {preview}")
+
+            # UX: показываем реальный вывод в окне «Результат патча».
+            # - успех: первые 1000 символов stdout (что реально выполнилось)
+            # - ошибка: до 4000 символов stdout+stderr (хвост pytest, import error)
+            # Полный лог всегда в output_path-файле.
+            if result.ok:
+                stdout_preview = (result.stdout or "").strip()
+                if stdout_preview:
+                    if len(stdout_preview) > 2000:
+                        stdout_preview = (
+                            stdout_preview[:2000]
+                            + "\n... (обрезано, полный лог — output_path)"
+                        )
+                    changes_log.append("   ─── RUN stdout ───")
+                    changes_log.append(stdout_preview)
+                    changes_log.append("   ─────────────────")
+                if result.output_path:
+                    changes_log.append(
+                        f"   💡 Полный лог: {result.output_path}. "
+                        "В окне результата нажмите «Копировать всё»."
+                    )
+            else:
+                parts: list[str] = []
+                if result.stdout:
+                    parts.append(result.stdout.rstrip())
+                if result.stderr:
+                    parts.append("--- STDERR ---")
+                    parts.append(result.stderr.rstrip())
+                combined = "\n".join(parts)
+                if len(combined) > 8000:
+                    combined = (
+                        combined[:8000]
+                        + "\n... (обрезано, полный лог — output_path)"
+                    )
+                if combined:
+                    changes_log.append("   ─── RUN output ───")
+                    changes_log.append(combined)
+                    changes_log.append("   ─────────────────")
+                if result.output_path:
+                    changes_log.append(
+                        f"   💡 Полный лог: {result.output_path}. "
+                        "В окне результата нажмите «Копировать всё»."
+                    )
                 if on_failure == "abort":
                     aborted = True
                     changes_log.append("⏹ PIPELINE ABORTED")

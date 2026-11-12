@@ -29,10 +29,13 @@ ARCHITECTURE REQUIREMENTS (CRITICAL):
 - Include Verification (Verify) steps only where necessary to check correctness, but NOT as mandatory pairs for every stage.
 - The first step may be 'setup_workspace' (id: setup_workspace) to configure file extensions and ignore list, but it's optional.
 
-RULES:
-1. Return ONLY a valid JSON array of objects. NO MARKDOWN TEXT OUTSIDE THE ARRAY.
-2. Each object must have 'id', 'title' (string), and 'description' (string, detailed technical instructions).
-3. Order steps logically to achieve the task.
+RULES (CRITICAL — follow exactly):
+1. Return a JSON ARRAY [ ... ] — NOT an object {{ ... }}.
+2. Start with '[' and end with ']'. NO markdown, NO prose, NO ```json wrapper.
+3. DO NOT return keys like 'tools', 'answers', or 'reasoning' — that is the WRONG format.
+4. Each element MUST be an object with exactly these keys: 'id' (string), 'title' (string, short), 'description' (string, detailed).
+5. Example: [{{"id": "step_1", "title": "Setup", "description": "Create folders and files for..."}}, {{"id": "step_2", ...}}]
+6. Order steps logically to achieve the task.
 
 {env_block}
 
@@ -116,13 +119,25 @@ class GeneratePlanWorker(QObject):
 
     def _parse_plan(self, response: str) -> list[dict]:
         if not response:
+            log.warning("_parse_plan: empty response")
             return []
         cleaned = clean_json_text(response)
         try:
             data = json.loads(cleaned)
-        except Exception:
+        except Exception as e:
+            log.warning(
+                "_parse_plan: json.loads failed: %s; raw=%r",
+                e,
+                response[:500],
+            )
             return []
         if not isinstance(data, list):
+            log.warning(
+                "_parse_plan: expected list, got %s; keys=%r; raw=%r",
+                type(data).__name__,
+                sorted(data.keys())[:10] if isinstance(data, dict) else None,
+                response[:500],
+            )
             return []
         result: list[dict] = []
         for i, step in enumerate(data):
@@ -175,9 +190,25 @@ class GeneratePlanWorker(QObject):
             self.progress.emit(80, "Разбор плана...")
             plan = self._parse_plan(response)
             if not plan:
-                self.error.emit(f"Не удалось распарсить план. Ответ начинался с: {response[:200]}")
+                hint = ""
+                try:
+                    _parsed = json.loads(clean_json_text(response))
+                    if isinstance(_parsed, dict):
+                        _keys = set(_parsed.keys())
+                        if "tools" in _keys or "answers" in _keys:
+                            hint = (
+                                " Модель вернула {tools, answers} — это "
+                                "tool-call формат, а не план. Используйте "
+                                "более крупную модель (Qwen2.5-Coder-7B+) "
+                                "или BomjAPI."
+                            )
+                        else:
+                            hint = f" Модель вернула object (ключи: {sorted(_keys)[:5]}), ожидался массив."
+                except Exception as e:
+                    log.debug("_parse_plan hint detection failed: %s", e)
+                _preview = response[:300].replace("\n", " ⏎ ")
+                self.error.emit(f"Не удалось распарсить план.{hint} Ответ начинался с: {_preview}")
                 return
-
             self.progress.emit(100, f"Готово. Шагов: {len(plan)}")
             self.done.emit(plan)
         except Exception as e:

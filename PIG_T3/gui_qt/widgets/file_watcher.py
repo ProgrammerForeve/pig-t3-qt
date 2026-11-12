@@ -66,9 +66,11 @@ class FileWatcher(QObject):
         self._observer = None
         self._handler = None
         self._path: str | None = None
+        self._enabled: bool = True
 
     def start(self, path: str) -> bool:
         self.stop()
+        self._enabled = True
         if not path or not os.path.isdir(path):
             return False
         try:
@@ -87,6 +89,7 @@ class FileWatcher(QObject):
             return False
 
     def stop(self) -> None:
+        self._enabled = False
         if self._observer is not None:
             with contextlib.suppress(Exception):
                 self._observer.stop()
@@ -104,9 +107,30 @@ class FileWatcher(QObject):
 
     def _schedule_debounce(self) -> None:
         # Вызывается в main-thread (queued от _fs_event).
+        # Guard: _fs_event мог быть queued до уничтожения FileWatcher.
+        from shiboken6 import isValid
+
+        if not isValid(self):
+            return
+        if getattr(self, "_debounce", None) is None:
+            return
+        if not isValid(self._debounce):
+            return
         self._debounce.start()
 
     def _on_fs_event(self) -> None:
         # Вызывается из watchdog-треда. QTimer.start() тут небезопасен;
         # эмитим сигнал — Qt доставит его через queued connection.
+        # CRITICAL: если watchdog уже остановлен (pause_file_watcher),
+        # НЕ emit'им. Иначе fork() в subprocess.run копирует Qt-lock
+        # в child в inconsistent state → parent abort (см. свежий
+        # /tmp/pig_crash.log: apply_worker + _on_fs_event).
+        if not getattr(self, "_enabled", True):
+            return
+        from shiboken6 import isValid
+
+        if not isValid(self):
+            return
+        if not isValid(self._fs_event):
+            return
         self._fs_event.emit()

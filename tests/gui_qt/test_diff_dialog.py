@@ -56,4 +56,45 @@ def test_cancel_rejects(qtbot):
     dlg = DiffDialog(diffs)
     qtbot.addWidget(dlg)
     dlg.btn_cancel.click()
+
+
+# ---------- P2 (issue 6): status="failed" ----------
+
+
+def test_failed_status_icon(qtbot):
+    diffs = [_d("a.py", "failed", "Патч не дал изменений")]
+    dlg = DiffDialog(diffs)
+    qtbot.addWidget(dlg)
+    assert "⚠️" in dlg.file_list.item(0).text()
+
+
+def test_failed_only_disables_apply(qtbot):
+    diffs = [
+        _d("a.py", "failed", "не найдено"),
+        _d("b.py", "failed", "вне диапазона"),
+    ]
+    dlg = DiffDialog(diffs)
+    qtbot.addWidget(dlg)
+    assert not dlg.btn_apply.isEnabled()
+    assert dlg.btn_apply.toolTip()
+
+
+def test_failed_with_created_keeps_apply_enabled(qtbot):
+    diffs = [
+        _d("a.py", "failed", "не найдено"),
+        _d("b.py", "created", "+x"),
+    ]
+    dlg = DiffDialog(diffs)
+    qtbot.addWidget(dlg)
+    assert dlg.btn_apply.isEnabled()
+
+
+def test_failed_with_commands_keeps_apply_enabled(qtbot):
+    from PIG_T3.gui_qt.workers.diff_preview import CommandSpec
+
+    diffs = [_d("a.py", "failed", "не найдено")]
+    cmds = [CommandSpec(command="pytest")]
+    dlg = DiffDialog(diffs, commands=cmds)
+    qtbot.addWidget(dlg)
+    assert dlg.btn_apply.isEnabled()
     assert dlg.result() == QDialog.DialogCode.Rejected

@@ -87,7 +87,12 @@ class MainWindow(QMainWindow):
             elif key == "info":
                 widget = InfoTab()
             elif key == "editor":
-                widget = EditorTab(self.settings)
+                gen_tab = self._tab_widgets.get("generator")
+                widget = EditorTab(
+                    self.settings,
+                    pause_watcher_cb=getattr(gen_tab, "pause_file_watcher", None),
+                    resume_watcher_cb=getattr(gen_tab, "resume_file_watcher", None),
+                )
             elif key == "quality":
                 widget = QualityTab()
             elif key == "plan":

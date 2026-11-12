@@ -315,6 +315,20 @@ def test_tree_ignores_empty_ignore_entries(qtbot, tmp_path):
 
 
 def test_capture_tree_state_returns_dict(qtbot, tmp_path):
+    # Targeted gc.collect — ТОЛЬКО этот тест, не все 780+.
+    #
+    # 30+ предыдущих тестов создали GeneratorTab → ProjectTreeModel
+    # → TreeNode (циклы parent↔children). Python GC не собрал их
+    # к моменту #35, shiboken collect'ит C++ QAbstractItemModel
+    # обёртки в неудачном порядке → SIGSEGV в середине прогона.
+    # В изоляции этот тест проходит (pollution накоплен предыдущими).
+    #
+    # Безопасно: pytest-qt cleanup предыдущих тестов уже отработал,
+    # все C++ объекты уничтожены корректно, остались только
+    # Python-циклы TreeNode. gc.collect() разбирает их за ~5-10 мс.
+    import gc as _gc
+
+    _gc.collect()
     (tmp_path / "a.py").write_text("x")
     settings = {
         "root_folder": str(tmp_path),

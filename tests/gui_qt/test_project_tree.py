@@ -38,6 +38,48 @@ def test_root_row_count(model):
     assert model.rowCount(QModelIndex()) == 3
 
 
+def test_column_count_is_2(model):
+    assert model.columnCount(QModelIndex()) == 2
+
+
+def test_size_column_shows_bytes(model):
+    idx = _find_top(model, "main.py")
+    size_idx = model.index(idx.row(), 1, idx.parent())
+    text = model.data(size_idx, Qt.ItemDataRole.DisplayRole)
+    assert text  # не пустой
+    assert "B" in text or "KB" in text or "MB" in text
+
+
+def test_size_column_right_aligned(model):
+    idx = _find_top(model, "main.py")
+    size_idx = model.index(idx.row(), 1, idx.parent())
+    align = model.data(size_idx, Qt.ItemDataRole.TextAlignmentRole)
+    assert align is not None
+    assert int(align) & int(Qt.AlignmentFlag.AlignRight)
+
+
+def test_header_data(model):
+    assert model.headerData(0, Qt.Orientation.Horizontal) == "Файл"
+    assert model.headerData(1, Qt.Orientation.Horizontal) == "Размер"
+
+
+def test_size_column_not_checkable(model):
+    idx = _find_top(model, "main.py")
+    size_idx = model.index(idx.row(), 1, idx.parent())
+    flags = model.flags(size_idx)
+    assert not (flags & Qt.ItemFlag.ItemIsUserCheckable)
+    # но name-колонка — checkable
+    name_idx = model.index(idx.row(), 0, idx.parent())
+    assert model.flags(name_idx) & Qt.ItemFlag.ItemIsUserCheckable
+
+
+def test_setdata_on_size_column_returns_false(model):
+    idx = _find_top(model, "main.py")
+    size_idx = model.index(idx.row(), 1, idx.parent())
+    ok = model.setData(size_idx, Qt.CheckState.Unchecked.value, Qt.ItemDataRole.CheckStateRole)
+    assert ok is False
+
+
 def test_top_level_sorted_dirs_first(model):
     names = [
         model.data(model.index(i, 0, QModelIndex()), Qt.ItemDataRole.DisplayRole)
@@ -215,3 +257,19 @@ def test_set_all_checked_true(model):
 def test_set_all_checked_emits_signal(model, qtbot):
     with qtbot.waitSignal(model.checkStateChanged, timeout=500):
         model.set_all_checked(False)
+
+
+# ---------- P2: tooltip с размером ----------
+
+
+def test_tooltip_contains_size_and_tokens(model):
+    idx = _find_top(model, "main.py")
+    tip = model.data(idx, Qt.ItemDataRole.ToolTipRole)
+    assert tip
+    assert "main.py" in tip
+    assert "байт" in tip
+    assert "токенов" in tip
+
+
+def test_tooltip_root_returns_none(model):
+    assert model.data(QModelIndex(), Qt.ItemDataRole.ToolTipRole) is None

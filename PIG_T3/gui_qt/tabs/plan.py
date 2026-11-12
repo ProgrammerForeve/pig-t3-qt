@@ -228,6 +228,8 @@ class PlanTab(QWidget):
 
     def _connect_signals(self) -> None:
         self.btn_refresh.clicked.connect(self.load_plan)
+        self.btn_new_plan.clicked.connect(self._on_new_plan_clicked)
+        self.btn_delete_step.clicked.connect(self._on_delete_step)
         self.btn_undo_plan.clicked.connect(self._on_undo_plan)
         self.btn_redo_plan.clicked.connect(self._on_redo_plan)
         self.plan_list.currentRowChanged.connect(self._on_step_selected)
@@ -238,7 +240,6 @@ class PlanTab(QWidget):
         self.report_edit.textChanged.connect(self._schedule_save)
         self.cb_completed.toggled.connect(self._on_completed_toggled)
 
-        # T-405..T-409 — заглушки на этом этапе
         self.btn_exec_selected.clicked.connect(self._on_exec_selected_clicked)
         self.btn_exec_full.clicked.connect(self._on_exec_full_clicked)
         self.btn_retry.clicked.connect(self._on_retry_clicked)
@@ -497,11 +498,36 @@ class PlanTab(QWidget):
                 "Сначала выберите папку проекта во вкладке Генератор.",
             )
             return
-
         models = ["None", "BomjAPI", "Web: Gemini", "Web: DeepSeek"]
         with contextlib.suppress(Exception):
             from ...core.ollama_client import get_installed_models
 
+            for _m in get_installed_models():
+                if _m not in models:
+                    models.append(_m)
+        # Issue 2: LM Studio-модели в диалоге «Новый План».
+        # Сначала кеш (мгновенно), затем live-fetch (2-сек timeout).
+        with contextlib.suppress(Exception):
+            from ...core.lmstudio_client import get_lmstudio_models
+            from ..workers.lmstudio_models_worker import (
+                get_cached_models as _get_lm_cached,
+            )
+            from ..workers.lmstudio_models_worker import (
+                save_models_to_cache as _save_lm_cache,
+            )
+
+            _lm_models = list(_get_lm_cached(self.settings))
+            _live = get_lmstudio_models(
+                base_url=self.settings.get("lmstudio_base_url", "http://localhost:1234/v1"),
+                api_key=self.settings.get("lmstudio_api_key", "lm-studio"),
+            )
+            if _live:
+                _save_lm_cache(self.settings, _live)
+                _lm_models = _live
+            for _m in _lm_models:
+                _name = f"LM Studio: {_m}"
+                if _name not in models:
+                    models.append(_name)
             models.extend(get_installed_models())
 
         dlg = NewPlanDialog(models, parent=self)
@@ -552,6 +578,13 @@ class PlanTab(QWidget):
         self.status_label.setText(f"{msg} ({percent}%)")
 
     def _on_gen_plan_done(self, plan: list) -> None:
+        try:
+            from shiboken6 import isValid
+
+            if not isValid(self):
+                return
+        except Exception:
+            return
         self._snapshot()
         self.plan_data = plan
         self.save_plan_silently()
@@ -559,20 +592,44 @@ class PlanTab(QWidget):
         self.status_label.setText(f"✅ План сгенерирован. Шагов: {len(plan)}")
 
     def _on_gen_plan_error(self, msg: str) -> None:
+        try:
+            from shiboken6 import isValid
+
+            if not isValid(self):
+                return
+        except Exception:
+            return
         self.status_label.setText(f"❌ Ошибка генерации: {msg}")
         _show_error(self, "Ошибка генерации", msg)
 
     def _on_gen_plan_cancelled(self) -> None:
+        try:
+            from shiboken6 import isValid
+
+            if not isValid(self):
+                return
+        except Exception:
+            return
         self.status_label.setText("⏹ Генерация плана отменена")
 
     def _cleanup_gen_plan_thread(self, *_args) -> None:
         thread = self._gen_plan_thread
+        worker = self._gen_plan_worker
         self._gen_plan_thread = None
         self._gen_plan_worker = None
         if thread is not None:
             with contextlib.suppress(RuntimeError):
+                thread.requestInterruption()
                 thread.quit()
-                thread.wait(3000)
+                if not thread.wait(3000):
+                    # Worker stuck (e.g. _extract_imports on huge file).
+                    # Terminate — иначе Python GC collect'ит QThread wrapper
+                    # while running → QThread destructor waits on itself.
+                    thread.terminate()
+                    thread.wait(2000)
+            if worker is not None:
+                with contextlib.suppress(RuntimeError, AttributeError):
+                    worker.moveToThread(QThread.currentThread())
         self.btn_new_plan.setEnabled(True)
         self.btn_exec_selected.setEnabled(True)
         self.btn_exec_full.setEnabled(True)

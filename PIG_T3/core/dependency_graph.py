@@ -1,8 +1,10 @@
 import ast
 import os
 import re
-from typing import List, Dict, Set, Optional
+from typing import Dict, List, Optional, Set
+
 import networkx as nx
+
 
 class DependencyGraph:
     """
@@ -60,20 +62,44 @@ class DependencyGraph:
                     self.graph.add_edge(module_name, target_module)
         return self.graph
 
+    _IMPORT_RE = re.compile(
+        r'^[ \t]*(?:'
+        r'import\s+([\w\.]+(?:\s*,\s*[\w\.]+)*)'
+        r'|from\s+([\w\.]+)\s+import'
+        r')',
+        re.MULTILINE,
+    )
+
     def _extract_imports(self, file_path: str) -> List[str]:
-        """Извлекает все импортируемые имена модулей из файла."""
+        """Извлекает имена импортируемых модулей через regex.
+
+        SIGSEGV defensive (см. /tmp/pig_crash.log, ast.walk):
+        ast.walk — C-extension с рекурсией, на глубоко вложенных AST
+        (data-файлы, base64, минифицированный код) даёт SIGSEGV.
+        RecursionError не ловится — это C-level stack overflow.
+        Regex линейный, работает на любом файле без AST.
+        Погрешность: не парсит import внутри строк/комментариев —
+        для графа зависимостей (эвристика) не критично.
+        """
         imports = []
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(
+                file_path, encoding='utf-8', errors='ignore'
+            ) as f:
                 content = f.read()
-            tree = ast.parse(content)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        imports.append(alias.name)
-                elif isinstance(node, ast.ImportFrom):
-                    if node.module:
-                        imports.append(node.module)
+            for m in self._IMPORT_RE.finditer(content):
+                names = m.group(1)
+                if names:
+                    for part in names.split(','):
+                        root = part.strip().split('.')[0]
+                        if root:
+                            imports.append(root)
+                else:
+                    module = m.group(2)
+                    if module:
+                        root = module.split('.')[0]
+                        if root:
+                            imports.append(root)
         except Exception:
             pass
         return imports
@@ -111,7 +137,7 @@ class DependencyGraph:
             if not file_path.endswith('.py'):
                 continue
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(file_path, encoding='utf-8', errors='ignore') as f:
                     content = f.read()
                 for id in identifiers:
                     if id in content:

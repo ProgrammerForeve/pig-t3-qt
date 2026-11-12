@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -43,8 +45,28 @@ class SettingsDialog(QDialog):
 
     # ---------- UI ----------
 
+    def _fit_to_screen(self) -> None:
+        """Подогнать под доступный экран. 720x900 не влезает
+        на ноутбуках 768p — Qt не даёт уменьшить ниже минимума
+        и кнопки уходят за пределы экрана."""
+        try:
+            from PySide6.QtWidgets import QApplication
+
+            screen = QApplication.primaryScreen()
+            if screen is None:
+                return
+            avail = screen.availableGeometry()
+            w = min(720, max(480, avail.width() - 80))
+            h = min(900, max(400, avail.height() - 80))
+            self.resize(w, h)
+        except Exception:  # noqa: S110 — Qt может быть без screen (headless tests)
+            pass
+
     def _setup_ui(self) -> None:
-        self.setWindowTitle("Настройки")
+        self.setMinimumSize(480, 380)
+        self._fit_to_screen()
+        # Qt-Material: заголовок в margin-top над рамкой; 14px — дефолт.
+        self.setStyleSheet("QGroupBox { margin-top: 14px; }")
         self.setMinimumSize(560, 640)
 
         layout = QVBoxLayout(self)
@@ -152,6 +174,15 @@ class SettingsDialog(QDialog):
         self.confirm_cmd_cb.setToolTip("Показывать список команд в диалоге diff перед применением.")
         cmd_layout.addWidget(self.confirm_cmd_cb)
 
+        self.allow_shell_ops_cb = QCheckBox("Разрешать shell-операторы (; && || | $()) при whitelist")
+        self.allow_shell_ops_cb.setToolTip(
+            "По умолчанию при непустом whitelist команды с ';', '&&', '||', "
+            "'|', '$()' блокируются (защита от 'pytest; rm -rf /'). "
+            "Включите, если хотите легитимные pipes/&& (например, "
+            "'pytest ... | tail')."
+        )
+        cmd_layout.addWidget(self.allow_shell_ops_cb)
+
         lmstudio_group = QGroupBox("LM Studio (OpenAI-совместимый)")
         lmstudio_form = QFormLayout(lmstudio_group)
         self.lmstudio_url_edit = QLineEdit()
@@ -169,16 +200,15 @@ class SettingsDialog(QDialog):
         lmstudio_form.addRow("Embeddings модель:", self.lmstudio_embeddings_edit)
         layout.addWidget(lmstudio_group)
 
-        cmd_row = QFormLayout()
-        self.cmd_timeout_spin = QSpinBox()
-        self.cmd_timeout_spin.setRange(1, 3600)
-        self.cmd_timeout_spin.setSuffix(" сек")
-        cmd_row.addRow("Таймаут по умолчанию:", self.cmd_timeout_spin)
-        self.cmd_whitelist_edit = QLineEdit()
-        self.cmd_whitelist_edit.setPlaceholderText("pytest,ruff,mypy (пусто = все разрешены)")
-        cmd_row.addRow("Whitelist:", self.cmd_whitelist_edit)
-        cmd_layout.addLayout(cmd_row)
-        layout.addWidget(cmd_group)
+        prompt_group = QGroupBox("📝 Пользовательский системный промт")
+        prompt_layout = QVBoxLayout(prompt_group)
+        self.custom_system_prompt_edit = QPlainTextEdit()
+        self.custom_system_prompt_edit.setMaximumHeight(120)
+        self.custom_system_prompt_edit.setPlaceholderText(
+            "Добавляется к системному промту в отчёте. Пусто = стандартное поведение."
+        )
+        prompt_layout.addWidget(self.custom_system_prompt_edit)
+        layout.addWidget(prompt_group)
 
         cmd_row = QFormLayout()
         self.cmd_timeout_spin = QSpinBox()
@@ -190,6 +220,8 @@ class SettingsDialog(QDialog):
         cmd_row.addRow("Whitelist:", self.cmd_whitelist_edit)
         cmd_layout.addLayout(cmd_row)
         layout.addWidget(cmd_group)
+
+        # (дублирующий блок cmd_row удалён — issue 2 cleanup)
 
         vis_group = QGroupBox("Отображение вкладок")
         vis_layout = QVBoxLayout(vis_group)
@@ -234,7 +266,11 @@ class SettingsDialog(QDialog):
         llm_form.addRow("Размер чанка анализа:", self.quality_chunk_spin)
         layout.addWidget(llm_group)
 
-        return w
+        layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(w)
+        return scroll
 
     def _populate(self) -> None:
         s = self._settings
@@ -260,12 +296,14 @@ class SettingsDialog(QDialog):
         self.auto_refresh_cb.setChecked(bool(s.get("auto_refresh_tree", True)))
         self.allow_cmd_cb.setChecked(bool(s.get("allow_command_execution", False)))
         self.confirm_cmd_cb.setChecked(bool(s.get("command_confirm_in_editor", True)))
+        self.allow_shell_ops_cb.setChecked(bool(s.get("command_allow_shell_operators", False)))
         self.cmd_timeout_spin.setValue(int(s.get("command_default_timeout", 120)))
         self.cmd_whitelist_edit.setText(s.get("command_whitelist", ""))
         self.lmstudio_url_edit.setText(s.get("lmstudio_base_url", "http://localhost:1234/v1"))
         self.lmstudio_key_edit.setText(s.get("lmstudio_api_key", "lm-studio"))
         self.lmstudio_timeout_spin.setValue(int(s.get("lmstudio_timeout", 600)))
         self.lmstudio_embeddings_edit.setText(s.get("lmstudio_embeddings_model", ""))
+        self.custom_system_prompt_edit.setPlainText(s.get("custom_system_prompt", "") or "")
 
         vis = s.get("tabs_visibility", {})
         for key, cb in self.vis_checks.items():
@@ -304,12 +342,14 @@ class SettingsDialog(QDialog):
         s["auto_refresh_tree"] = self.auto_refresh_cb.isChecked()
         s["allow_command_execution"] = self.allow_cmd_cb.isChecked()
         s["command_confirm_in_editor"] = self.confirm_cmd_cb.isChecked()
+        s["command_allow_shell_operators"] = self.allow_shell_ops_cb.isChecked()
         s["command_default_timeout"] = self.cmd_timeout_spin.value()
         s["command_whitelist"] = self.cmd_whitelist_edit.text().strip()
         s["lmstudio_base_url"] = self.lmstudio_url_edit.text().strip() or "http://localhost:1234/v1"
         s["lmstudio_api_key"] = self.lmstudio_key_edit.text().strip() or "lm-studio"
         s["lmstudio_timeout"] = self.lmstudio_timeout_spin.value()
         s["lmstudio_embeddings_model"] = self.lmstudio_embeddings_edit.text().strip()
+        s["custom_system_prompt"] = self.custom_system_prompt_edit.toPlainText().strip()
 
         s["tabs_visibility"] = {key: cb.isChecked() for key, cb in self.vis_checks.items()}
 
