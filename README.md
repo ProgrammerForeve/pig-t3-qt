@@ -13,6 +13,9 @@
 - 🔍 **Анализ кода** — офлайн-аудит Python (Radon CC/MI, Pylint, Bandit)
 - 🧠 **Оптимизация контекста** — отбор релевантных файлов через граф зависимостей + LLM-ранжирование
 - 🧠 **RAG-оптимизация** (опционально) — семантический отбор через
+- 🖥️ **LM Studio** — OpenAI-совместимый локальный backend
+  (`localhost:1234/v1`), модели помечены префиксом `LM Studio: `.
+  См. [ADR-013](docs/adr/013-lmstudio.md).
   Ollama `nomic-embed-text` или `sentence-transformers`; индекс
   `.pig/rag.db`, BM25+vector+RRF. См. [ADR-011](docs/adr/011-rag.md).
 
@@ -60,6 +63,8 @@ GUI переписан с Tkinter на PySide6 в v2.0.0. См. [docs/adr/](docs
 | Web: DeepSeek | chat.deepseek.com через Playwright |
 | Web: Gemini | AI Studio через Playwright |
 | BomjAPI | Ручной ввод (промпт/ответ) для любого веб-чата |
+| LM Studio | OpenAI-совместимый API на `localhost:1234/v1` |
+
 
 ---
 

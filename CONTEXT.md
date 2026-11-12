@@ -30,6 +30,8 @@ GUI с Tkinter на PySide6 + Qt-Material. Ссылки на ADR — в `docs/ad
 | `ApplyWorker` | Применение JSON-патча | `done(log, record)`, `error` |
 | `UndoRedoWorker` | Откат/повтор snapshot | `done(msg)`, `error` |
 | `ScanWorker` | Аудит кода (radon/pylint/bandit) | `progress(int, str)`, `done(list[FileMetrics])`, `error`, `cancelled` |
+| `OllamaModelsWorker` | Асинхронная загрузка моделей Ollama (D3) | `done(list)`, `error` |
+| `LMStudioModelsWorker` | Асинхронная загрузка моделей LM Studio (C7b) | `done(list)`, `error` |
 
 ### Модели (models)
 `QAbstractItemModel` / `QAbstractTableModel` в `PIG_T3/gui_qt/models/`.
@@ -44,6 +46,7 @@ GUI с Tkinter на PySide6 + Qt-Material. Ссылки на ADR — в `docs/ad
 - `OllamaWrapper` — локальная Ollama
 - `WebWrapper` — DeepSeek/Gemini через Playwright
 - `BomjWrapper` — ручной ввод через `_BomjBridge` + `QDialog`
+- `LMStudioWrapper` — LM Studio через OpenAI-совместимый `/v1/chat/completions`
 
 Фабрика `make_llm_client(model_name, parent, settings)`.
 
@@ -96,15 +99,15 @@ Ctrl+C/V/X/A/Z (ADR-007). QA-чек-лист: все поля ввода, все
 
 Опциональный слой семантического отбора файлов. Включается
 чекбоксом «Использовать RAG» в `OptimizeDialog`. Выключен по
-умолчанию — требует Ollama (`nomic-embed-text`) или
-`sentence-transformers`.
+умолчанию — требует Ollama (`nomic-embed-text`), LM Studio
+(embeddings-модель) или `sentence-transformers`.
 
 ### Компоненты (`PIG_T3/core/rag/`)
 
 | Модуль | Назначение |
 | :--- | :--- |
 | `chunker.py` | AST-aware разбиение (функции/классы как чанки) |
-| `embeddings.py` | Ollama / sentence-transformers за одним Protocol |
+| `embeddings.py` | Ollama / LM Studio / sentence-transformers за одним Protocol |
 | `store.py` | `sqlite-vec` в `.pig/rag.db`, KNN через `vec0` |
 | `retriever.py` | BM25 + vector + RRF fusion (k=60) |
 | `indexer.py` | `ProjectIndexer.build(rel_paths)` → chunk + embed + store |
@@ -134,11 +137,19 @@ Ctrl+C/V/X/A/Z (ADR-007). QA-чек-лист: все поля ввода, все
 ollama serve
 ollama pull nomic-embed-text
 
-# вариант 2 — sentence-transformers (тяжёлый)
+# вариант 2 — LM Studio (OpenAI-совместимый)
+# 1. В LM Studio: Local Server → Start (localhost:1234)
+# 2. Загрузить embeddings-модель (например nomic-embed-text-v1.5)
+# 3. В PIG-T3: Настройки → LM Studio → Embeddings модель
+
+# вариант 3 — sentence-transformers (тяжёлый)
 uv sync --extra rag
 ```
 
 Затем: **Генератор → ✨ Оптимизация контекста → ✅ Использовать RAG**.
+
+Embeddings-backend выбирается автоматически: **Ollama → LM Studio →
+sentence-transformers** (первый доступный).
 
 ## Как добавить новую вкладку
 

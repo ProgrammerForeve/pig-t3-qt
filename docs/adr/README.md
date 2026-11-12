@@ -17,3 +17,4 @@
 | [010](010-pytest-sessionfinish.md) | os._exit в pytest_sessionfinish | Принято |
 | [011](011-rag.md) | RAG для семантического отбора файлов | Принято |
 | [012](012-run-command.md) | run_command — выполнение shell-команд из JSON | Принято |
+| [013](013-lmstudio.md) | LM Studio — OpenAI-совместимый backend | Принято |
