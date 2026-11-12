@@ -35,7 +35,17 @@ def test_worker_default_uses_context_optimizer(tmp_path):
 
 def test_worker_use_rag_creates_rag_optimizer(tmp_path, monkeypatch):
     """RagOptimizer создаётся, если backend доступен (мокаем)."""
+    from PIG_T3.core.rag import embeddings as emb_module
     from PIG_T3.core.rag import optimizer as rag_opt_module
+
+    # Mock the factory so the test does not depend on whether Ollama
+    # or LM Studio is running. In CI neither is up → auto() raises →
+    # fallback to ContextOptimizer before RagOptimizer is created.
+    monkeypatch.setattr(
+        emb_module,
+        "make_embeddings_backend",
+        lambda *a, **kw: _FakeBackend(),
+    )
 
     original = rag_opt_module.RagOptimizer.__init__
 
@@ -74,7 +84,14 @@ def test_worker_fallback_when_no_backend(tmp_path, monkeypatch):
 
 def test_worker_passes_scan_config(tmp_path, monkeypatch):
     """scan_config передаётся в RagOptimizer."""
+    from PIG_T3.core.rag import embeddings as emb_module
     from PIG_T3.core.rag import optimizer as rag_opt_module
+
+    monkeypatch.setattr(
+        emb_module,
+        "make_embeddings_backend",
+        lambda *a, **kw: _FakeBackend(),
+    )
 
     captured = {}
     original = rag_opt_module.RagOptimizer.__init__

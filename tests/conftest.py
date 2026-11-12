@@ -79,3 +79,70 @@ def _silence_dialogs(monkeypatch):
 
     monkeypatch.setattr(gen_module, "_show_info_dialog", lambda *a, **kw: None)
     monkeypatch.setattr(gen_module, "_show_critical_dialog", lambda *a, **kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_async_workers(monkeypatch, request):
+    """Отключает фоновые треды в UI-тестах.
+
+    test_main_window_smoke.py создаёт MainWindow на каждый тест.
+    Каждый MainWindow → EditorTab → 2 QThread воркера (Ollama +
+    LM Studio) + FileWatcher → watchdog.Observer (real OS thread).
+    9 тестов × 3+ треда = 27+ живых потоков перед test_misc_coverage.py.
+    В offscreen CI teardown не успевает их остановить → SIGABRT
+    (C++ QObject destroyed пока worker ещё emit'ит).
+
+    Реальные файлы (test_file_watcher, test_ollama_models_worker,
+    test_lmstudio_models_worker, test_optimize_dialog_async)
+    исключены по nodeid — они тестируют поведение воркеров явно.
+
+    В продакшене поведение не меняется — фикстура только в pytest.
+    """
+    nodeid = request.node.nodeid
+
+    # FileWatcher: отключить реальный watchdog.Observer везде,
+    # кроме тестов самого FileWatcher
+    if "test_file_watcher" not in nodeid:
+        from PIG_T3.gui_qt.widgets.file_watcher import FileWatcher
+
+        monkeypatch.setattr(FileWatcher, "start", lambda self, path: False)
+
+    # Async model workers в EditorTab/OptimizeDialog: отключить HTTP
+    # только для UI-тестов, не тестирующих сами воркеры
+    worker_test_files = (
+        "test_ollama_models_worker",
+        "test_lmstudio_models_worker",
+        "test_optimize_dialog_async",
+        "test_optimize_dialog_rag",
+    )
+    if not any(t in nodeid for t in worker_test_files):
+        from PIG_T3.gui_qt.dialogs import optimize_dialog as od_module
+        from PIG_T3.gui_qt.tabs import editor as editor_module
+
+        def _safe_populate_models(self):
+            base = [
+                "None",
+                "BomjAPI",
+                "Web: Gemini",
+                "Web: DeepSeek",
+                "Web: DeepSeek (DeepThink)",
+                "Web: DeepSeek Expert",
+                "Web: DeepSeek Expert (DeepThink)",
+            ]
+            self.model_combo.addItems(base)
+
+        monkeypatch.setattr(
+            editor_module.EditorTab,
+            "_populate_models",
+            _safe_populate_models,
+        )
+        monkeypatch.setattr(
+            od_module.OptimizeDialog,
+            "_fetch_models_async",
+            lambda self: None,
+        )
+        monkeypatch.setattr(
+            od_module.OptimizeDialog,
+            "_fetch_lmstudio_models_async",
+            lambda self: None,
+        )
