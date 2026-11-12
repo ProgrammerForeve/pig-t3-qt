@@ -15,12 +15,12 @@ GUI переписан с Tkinter на PySide6 в v2.0.0. См. [docs/adr/](docs
 
 ## 📥 Скачать готовый бинарник
 
-Последний релиз: **[v2.2.0](https://github.com/ProgrammerForeve/pig-t3-qt/releases/tag/v2.2.0)**
+Последний релиз: **[смотреть все релизы](https://github.com/ProgrammerForeve/pig-t3-qt/releases/latest)**
 
-| OS | Скачать | Размер |
-| :--- | :--- | :--- |
-| **Windows** | [PIG-T3-windows.zip](https://github.com/ProgrammerForeve/pig-t3-qt/releases/download/v2.2.0/PIG-T3-windows.zip) | ~108 MB |
-| **Linux** | [PIG-T3-linux.zip](https://github.com/ProgrammerForeve/pig-t3-qt/releases/download/v2.2.0/PIG-T3-linux.zip) | ~144 MB |
+| OS | Скачать |
+| :--- | :--- |
+| **Windows** | [PIG-T3-windows.zip](https://github.com/ProgrammerForeve/pig-t3-qt/releases/latest/download/PIG-T3-windows.zip) |
+| **Linux** | [PIG-T3-linux.zip](https://github.com/ProgrammerForeve/pig-t3-qt/releases/latest/download/PIG-T3-linux.zip) |
 
 - **Windows:** распаковать, запустить `PIG-T3.exe`
   (SmartScreen → **More info → Run anyway** — бинарник не подписан)
