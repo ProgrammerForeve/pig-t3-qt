@@ -294,6 +294,7 @@ class EditorTab(QWidget):
         idx = self.model_combo.findText(current)
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
+        self._load_history()
 
     def _connect_signals(self) -> None:
         self.btn_paste.clicked.connect(self._on_paste)
@@ -308,6 +309,7 @@ class EditorTab(QWidget):
     def set_path(self, folder: str) -> None:
         self._current_path = folder or ""
         self.path_edit.setText(self._current_path)
+        self._load_history()
 
     def load_json(self, text: str) -> None:
         self.editor_text.setPlainText(text)
@@ -581,6 +583,53 @@ class EditorTab(QWidget):
         self.btn_redo.setEnabled(bool(self.redo_stack))
         self.undo_available_changed.emit(bool(self.history_stack))
         self.redo_available_changed.emit(bool(self.redo_stack))
+        self._save_history()
+
+    def _history_file(self) -> str:
+        return os.path.join(self._current_path, ".pig", "editor_history.json")
+
+    def _save_history(self) -> None:
+        if not self._current_path or not os.path.isdir(self._current_path):
+            return
+        path = self._history_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "history": self.history_stack,
+                        "redo": self.redo_stack,
+                        "last": self._last_applied_content or "",
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+        except OSError:
+            pass
+
+    def _load_history(self) -> None:
+        self.history_stack = []
+        self.redo_stack = []
+        if not self._current_path or not os.path.isdir(self._current_path):
+            return
+        path = self._history_file()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+
+        def _valid(rec) -> bool:
+            return isinstance(rec, dict) and bool(rec.get("id"))
+
+        self.history_stack = [r for r in data.get("history", []) if _valid(r)]
+        self.redo_stack = [r for r in data.get("redo", []) if _valid(r)]
+        self._last_applied_content = data.get("last") or None
+        self.btn_undo.setEnabled(bool(self.history_stack))
+        self.btn_redo.setEnabled(bool(self.redo_stack))
 
     # ---------- Cleanup ----------
 

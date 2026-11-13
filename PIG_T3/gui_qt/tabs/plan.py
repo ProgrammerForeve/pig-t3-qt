@@ -989,3 +989,11 @@ class PlanTab(QWidget):
     def _show_warning_stub(title: str, text: str) -> None:
         # Отдельный метод — тесты подменяют его
         QMessageBox.information(None, title, text)
+
+    def showEvent(self, event) -> None:
+        """Загрузить план при первом показе вкладки (не в тестах)."""
+        super().showEvent(event)
+        if not getattr(self, "_plan_loaded", False):
+            self._plan_loaded = True
+            if self._current_path and os.path.isdir(self._current_path):
+                self.load_plan()

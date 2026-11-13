@@ -180,13 +180,16 @@ class GeneratorTab(QWidget):
 
         self.ext_edit = QLineEdit()
         self.output_edit = QLineEdit()
+        self.btn_gitignore = QPushButton(".gitignore")
+        self.btn_gitignore.setToolTip("Загрузить ignore-паттерны из .gitignore проекта")
+        self.btn_gitignore.setFixedWidth(130)
         self.btn_all_ext = QPushButton("Все")
         self.btn_all_ext.setToolTip("Собрать все уникальные расширения из проекта и подставить в поле")
-        self.btn_all_ext.setMaximumWidth(60)
+        self.btn_all_ext.setFixedWidth(130)
         ext_row = QHBoxLayout()
         ext_row.setContentsMargins(0, 0, 0, 0)
-        ext_row.addWidget(self.ext_edit, 1)
         ext_row.addWidget(self.btn_all_ext)
+        ext_row.addWidget(self.ext_edit, 1)
         fields_layout.addLayout(ext_row, 1, 0)
         fields_layout.addWidget(self.output_edit, 1, 1)
         fields_layout.setColumnStretch(0, 1)
@@ -196,7 +199,11 @@ class GeneratorTab(QWidget):
         # --- Ignore-лист ---
         layout.addWidget(QLabel("Исключить (Ignore):"))
         self.ignore_edit = QLineEdit()
-        layout.addWidget(self.ignore_edit)
+        ignore_row = QHBoxLayout()
+        ignore_row.setContentsMargins(0, 0, 0, 0)
+        ignore_row.addWidget(self.btn_gitignore)
+        ignore_row.addWidget(self.ignore_edit, 1)
+        layout.addLayout(ignore_row)
 
         # --- Опции генерации (сворачиваемые, T-106b) ---
         self.options_toggle = QToolButton()
@@ -312,6 +319,7 @@ class GeneratorTab(QWidget):
     def _connect_signals(self) -> None:
         self.btn_browse.clicked.connect(self.browse_folder)
         self.btn_all_ext.clicked.connect(self._on_all_ext_clicked)
+        self.btn_gitignore.clicked.connect(self._on_gitignore_clicked)
         self.recent_menu.project_selected.connect(self._on_recent_selected)
         self.recent_menu.recent_cleared.connect(self._on_recent_cleared)
         self.btn_auto.clicked.connect(self.auto_set_folder)
@@ -986,6 +994,50 @@ class GeneratorTab(QWidget):
 
     def _on_recent_cleared(self) -> None:
         self.settings["recent_projects"] = []
+        self._completer_model.setStringList([])
+        self._refresh_recent_menu()
+        self.settings_changed.emit()
+
+    def _on_gitignore_clicked(self) -> None:
+        """Загрузить ignore-паттерны из <project>/.gitignore."""
+        root = self.path_edit.text().strip()
+        if not root or not os.path.isdir(root):
+            self.status_label.setText("❌ Папка проекта не существует")
+            return
+        gitignore = os.path.join(root, ".gitignore")
+        if not os.path.exists(gitignore):
+            self.status_label.setText("⚠️ .gitignore не найден")
+            return
+        patterns: list[str] = []
+        try:
+            with open(gitignore, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or line.startswith("!"):
+                        continue
+                    line = line.lstrip("/").rstrip("/")
+                    if not line or line in patterns:
+                        continue
+                    if line.startswith("**/"):
+                        line = line[3:]
+                    if line.startswith("*."):
+                        line = line[1:]
+                    elif "*" in line:
+                        line = line.split("*")[0].rstrip("/")
+                    if not line or line in patterns:
+                        continue
+                    patterns.append(line)
+        except OSError as e:
+            self.status_label.setText(f"⚠️ Ошибка чтения .gitignore: {e}")
+            return
+        if not patterns:
+            self.status_label.setText("⚠️ В .gitignore нет паттернов")
+            return
+        existing = {x.strip() for x in self.ignore_edit.text().split(",") if x.strip()}
+        for p in patterns:
+            existing.add(p)
+        self.ignore_edit.setText(", ".join(sorted(existing)))
+        self.status_label.setText(f"📥 Загружено из .gitignore: {len(patterns)}")
         self._completer_model.setStringList([])
         self._refresh_recent_menu()
         self.settings_changed.emit()
