@@ -112,6 +112,16 @@ class MainWindow(QMainWindow):
 
         self._apply_tab_visibility()
 
+        # Синхронизация root_folder во вкладки с Генератором при старте.
+        # Без этого QualityTab/EditorTab/PlanTab создаются с пустым path
+        # до первого settings_changed от Генератора.
+        _root = self.settings.get("root_folder", "")
+        if _root:
+            for _key in ("editor", "quality", "plan"):
+                _w = self._tab_widgets.get(_key)
+                if _w is not None and hasattr(_w, "set_path"):
+                    _w.set_path(_root)
+
     def _make_placeholder(self, text: str) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)

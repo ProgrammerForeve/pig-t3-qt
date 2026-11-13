@@ -61,7 +61,9 @@ class QualityTab(QWidget):
         path_row = QHBoxLayout()
         path_row.addWidget(QLabel("Целевая папка:"))
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("Путь к проекту")
+        self.path_edit.setReadOnly(True)
+        self.path_edit.setPlaceholderText("Папка из вкладки Генератор")
+        self.path_edit.setToolTip("Путь синхронизируется из вкладки Генератор")
         path_row.addWidget(self.path_edit, 1)
         layout.addLayout(path_row)
 
