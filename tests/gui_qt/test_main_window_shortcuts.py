@@ -39,7 +39,7 @@ def window(qtbot, tmp_path, monkeypatch):
 
 def test_tab_shortcuts_registered(window):
     keys = {sc.key().toString() for sc in window.findChildren(QShortcut)}
-    for i in range(1, 6):
+    for i in range(1, 7):
         assert f"Ctrl+{i}" in keys, f"Ctrl+{i} not registered"
 
 

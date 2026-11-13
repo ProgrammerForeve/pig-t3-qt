@@ -76,8 +76,8 @@ def test_batch_summary_fail(tmp_path):
         allow_command_execution=True,
         runner=runner,
     )
-    assert "❌ RUN" in log
-    assert "ruff" in log
+    assert "❌ RUN 1/2" in log
+    assert "[2] ruff" in log
 
 
 def test_batch_abort_on_fail(tmp_path):
@@ -161,3 +161,21 @@ def test_batch_opt_in_required(tmp_path):
     )
     assert "RUN заблокирован" in log
     assert runner.calls == []
+
+
+def test_batch_summary_includes_index_middle(tmp_path):
+    """ADR-017 P1: summary показывает [N] упавшей команды в batch из 3+"""
+    runner = _BatchRunner([0, 1, 0])
+    log = apply_llm_changes(
+        _actions(
+            {
+                "action": "run_command",
+                "commands": ["ok1", "fail1", "ok2"],
+                "report_mode": "summary",
+            }
+        ),
+        str(tmp_path),
+        allow_command_execution=True,
+        runner=runner,
+    )
+    assert "❌ RUN 2/3: [2] fail1" in log

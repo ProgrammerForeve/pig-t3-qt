@@ -1,161 +1,115 @@
-# PIG-T3 · Контекст проекта
+# Глоссарий PIG-T3
 
-Документ фиксирует термины и архитектурные решения, принятые при миграции
-GUI с Tkinter на PySide6 + Qt-Material. Ссылки на ADR — в `docs/adr/`.
+Термины из ADR-014…017. См. `docs/adr/` и `docs/usage.md`.
 
-## Термины
+## Патч и действия
 
-### Вкладки (tabs)
-Верхнеуровневые разделы главного окна. Ключи: `generator`, `info`, `editor`,
-`plan`, `quality`. Каждая реализована как `QWidget` в `PIG_T3/gui_qt/tabs/`.
+**JSON-патч** — ответ LLM: корневой JSON-массив объектов-действий
+(`create` / `edit` / `delete` / `move` / `run_command` /
+`mark_step_completed` / `read_lines` / `update_settings`). Парсится в
+`core/patcher.py::apply_llm_changes`.
 
-| Вкладка | Класс | Файл |
-| :--- | :--- | :--- |
-| 🏠 Генератор | `GeneratorTab` | `tabs/generator.py` |
-| 🎓 Инфо | `InfoTab` | `tabs/info.py` |
-| ✏️ Редактор | `EditorTab` | `tabs/editor.py` |
-| 📝 План | `PlanTab` | `tabs/plan.py` |
-| 📊 Анализ кода | `QualityTab` | `tabs/quality.py` |
+**`FailedEdit`** (dataclass, `core/patcher.py`) — описание упавшего
+`edit` для retry: `path`, `find`, `replace`, `error`, `best_match_line`,
+`best_match_ratio`, `context_lines`, `total_lines`. Заполняется в
+`patch_context["failed_edits"]` при `on_failure: "retry_with_context"`.
 
-### Воркеры (workers)
-`QObject`-классы, перемещённые в `QThread` через `moveToThread`. Живут в
-`PIG_T3/gui_qt/workers/`. Контракт — `tests/gui_qt/test_threading_contract.py`.
+**`patch_context`** (`dict`, out-param `apply_llm_changes`) — слот
+обратной связи для caller'а:
+- `failed_edits: list[FailedEdit]` — что упало (для retry)
+- `read_requests: list[dict]` — что LLM попросила через `read_lines`
+- `needs_retry: bool` — `bool(failed_edits or read_requests)`
+- `applied_count: int` — сколько действий применилось
 
-| Воркер | Назначение | Сигналы |
-| :--- | :--- | :--- |
-| `GenerateWorker` | Сканирование проекта → отчёт | `progress`, `finished`, `error`, `cancelled` |
-| `OptimizeWorker` | Сжатие контекста (BFS + LLM) | `progress(int, str)`, `done(list)`, `error`, `cancelled` |
-| `GeneratePlanWorker` | Концепция → JSON-план | `progress`, `done(list)`, `error`, `cancelled` |
-| `PlanStepWorker` | Выполнение шага плана | `progress`, `done(step, log)`, `error(step, msg)`, `cancelled` |
-| `ApplyWorker` | Применение JSON-патча | `done(log, record)`, `error` |
-| `UndoRedoWorker` | Откат/повтор snapshot | `done(msg)`, `error` |
-| `ScanWorker` | Аудит кода (radon/pylint/bandit) | `progress(int, str)`, `done(list[FileMetrics])`, `error`, `cancelled` |
-| `OllamaModelsWorker` | Асинхронная загрузка моделей Ollama (D3) | `done(list)`, `error` |
-| `LMStudioModelsWorker` | Асинхронная загрузка моделей LM Studio (C7b) | `done(list)`, `error` |
+**`Read_lines`** (action) — `{path, start, end}` (≤ 200 строк). Чистое
+чтение, не требует `allow_command_execution`. Результат идёт в
+`patch_context["read_requests"]`.
 
-### Модели (models)
-`QAbstractItemModel` / `QAbstractTableModel` в `PIG_T3/gui_qt/models/`.
+## Retry (ADR-016)
 
-- `ProjectTreeModel` — дерево проекта с tristate чекбоксами. Использует
-  **quintptr `internalId`** вместо Python `internalPointer` (ADR-009).
-- `QualityTableModel` — 6 колонок `path/sloc/cc/mi/score/sec` для
-  `FileMetrics`. Цвет — по `FileMetrics.get_status_for_column()`.
+**`build_retry_prompt(failed_edits, read_requests, original_response)`**
+(`core/multi_turn.py`) — собирает компактный промпт для LLM: «исправь
+упавшие действия, предпочитай `replace_lines`, если не хватает
+контекста — верни `read_lines`». Обрезает по `max_chars=8000`.
 
-### LLM-обёртки (llm_wrappers)
-Единый интерфейс `.optimize_context(task, meta_list)` + `.ask(prompt)`:
-- `OllamaWrapper` — локальная Ollama
-- `WebWrapper` — DeepSeek/Gemini через Playwright
-- `BomjWrapper` — ручной ввод через `_BomjBridge` + `QDialog`
-- `LMStudioWrapper` — LM Studio через OpenAI-совместимый `/v1/chat/completions`
+**`_trim_original(raw)`** — вытаскивает `[...]` из `original_response`
+(LLM часто оборачивает JSON в markdown), обрезает до 4000 символов.
 
-Фабрика `make_llm_client(model_name, parent, settings)`.
+**`_find_near_match(full_text, find_str, threshold=0.6)`**
+(`core/patcher.py`) — fuzzy-поиск через `difflib.SequenceMatcher`.
+Возвращает `(line_1based, ratio, context_lines)` или `None`.
 
-### Состояние (state)
-- `app_config.json` — глобальные настройки (`ConfigManager`)
-- `.pig/state.json` — per-project: `ui_tree_expanded`, `ui_tree_unchecked`, `history_stack`, `redo_stack`
-- `.pig/plan.json` — план проекта
-- `.pig/backups/<uuid>/{before,after}/` — снапшоты для undo/redo
+## Flow control (ADR-014)
 
-### Горячие клавиши
-**Только нативные Qt** обработчики — никаких `QShortcut` для
-Ctrl+C/V/X/A/Z (ADR-007). QA-чек-лист: все поля ввода, все диалоги
-(после открытия, фокус на первом поле).
+**`depends_on`** — `list[str]` id'шников. Действие выполняется только
+если все deps = `ok`. Skip транзитивный (A fail → B skip → C skip).
 
-## Публичные API вкладок
+**`on_failure`** — `continue` (default) | `abort` | `rollback`.
+`rollback` = abort + restore `before/` для всех затронутых путей.
 
-### `GeneratorTab(settings)`
-- `collect_settings() -> dict`
-- `refresh_tree()`, `set_tree_data(files)`
-- `capture_tree_state() -> dict`
-- `commit_recent_projects()`
-- `stop_generation()`, `stop_optimization()`
-- Сигналы: `settings_changed`, `generation_finished`, `generation_cancelled`, `generation_error`
+**`on_success`** — `continue` (default) | `abort`. `abort` останавливает
+массив после успешного действия (редкий кейс: «первое действие
+валидирует — если прошло, не продолжать»).
 
-### `EditorTab(settings)`
-- `set_path(folder)`, `load_json(text)`
-- `stop_workers()`
-- Сигналы: `undo_available_changed(bool)`, `redo_available_changed(bool)`
+**`_toposort_actions(actions)`** (`core/patcher.py`) — топосортировка
+по `depends_on`. Цикл → возвращает строку-ошибку вместо массива.
 
-### `PlanTab(settings)`
-- `set_path(folder)`
-- `load_plan()`, `save_plan_silently()`
-- `stop_workers()`
-- Сигнал: `plan_changed`
+**`_rollback_patch(root, backup_dir, log)`** — откат:
+1. Удалить created (есть в `after/`, нет в `before/`)
+2. Restore из `before/` для всего остального
 
-### `QualityTab()`
-- `set_path(folder)`
-- `set_metrics(list[FileMetrics])`
-- `stop_scan()`
+## run_command batch (ADR-017)
 
-## Релизы (`docs/releases/`)
+**`CommandSpec`** (dataclass, `gui_qt/workers/diff_preview.py`) —
+описание одной команды для `DiffDialog`:
+- `command: str`
+- `output_path: str | None`
+- `timeout_sec: int`
+- `on_failure: str`
+- `batch_index: int | None` — 0-based, `None` если одиночная
+- `batch_size: int` — сколько команд в batch
 
-Артефакты каждого релиза:
-- `docs/releases/vX.Y.Z/QA.md` — QA-чек-лист (Windows/Linux smoke + фичи)
-- `docs/releases/vX.Y.Z/CHANGELOG.md` — сводка изменений от предыдущего тега
+**`summarize_output(text, max_lines=100, min_matches=5)`**
+(`core/command_runner.py`) — фильтрует stdout/stderr по failure-паттернам
+(pytest/ruff/mypy/pylint/bandit/traceback). Если `< min_matches` —
+fallback на последние 20 строк. Обрезает до `max_lines`.
 
-Новый релиз = новая подпапка `docs/releases/vX.Y.Z/`.
+**`report_mode`** — `summary` (одна строка + failure summary) или
+`full` (полный stdout/stderr). Default: `summary` для batch, `full`
+для одиночной.
 
-## RAG (Retrieval-Augmented Generation)
+## History tree (ADR-015)
 
-Опциональный слой семантического отбора файлов. Включается
-чекбоксом «Использовать RAG» в `OptimizeDialog`. Выключен по
-умолчанию — требует Ollama (`nomic-embed-text`), LM Studio
-(embeddings-модель) или `sentence-transformers`.
+**`HistoryTreeManager(root_folder)`** (`core/history_tree.py`) — data-layer
+для git-like дерева истории.
+- `apply(summary, files, source, backup_id) -> str` — записать ноду
+- `undo() -> HistoryNode | None` — current → parent
+- `redo() -> HistoryNode | None` — current → newest rolled_back child
+- `branch_from(node_id)` — следующий apply пойдёт от node_id
 
-### Компоненты (`PIG_T3/core/rag/`)
+**`HistoryNode`** (dataclass):
+- `id: str` — UUID, совпадает с `backup_id` из `ApplyWorker`
+- `parent: str | None` — родительская нода
+- `children: list[str]` — дочерние ноды
+- `action_summary: str` — человекочитаемое описание
+- `source: str` — `"editor"` | `"plan"`
+- `status: str` — `"applied"` | `"rolled_back"`
+- `files: list[str]` — затронутые пути
+- `applied_at: str` — ISO timestamp
 
-| Модуль | Назначение |
-| :--- | :--- |
-| `chunker.py` | AST-aware разбиение (функции/классы как чанки) |
-| `embeddings.py` | Ollama / LM Studio / sentence-transformers за одним Protocol |
-| `store.py` | `sqlite-vec` в `.pig/rag.db`, KNN через `vec0` |
-| `retriever.py` | BM25 + vector + RRF fusion (k=60) |
-| `indexer.py` | `ProjectIndexer.build(rel_paths)` → chunk + embed + store |
-| `optimizer.py` | `RagOptimizer.optimize()` — drop-in для `ContextOptimizer` |
+Persist: `.pig/history_tree.json` — `{current, nodes}`.
 
-### Индекс
+## Настройки
 
-- Файл: `<project>/.pig/rag.db` (в `.gitignore`)
-- Размер: ~10 MB на 10k чанков
-- Dimension фиксируется при создании; смена backend →
-  `DimensionMismatchError` (удалить файл и переиндексировать)
-- Полная пересборка при каждом `build()`. Инкрементальная —
-  future work (mtime + add/delete по файлам)
+**`allow_command_execution`** (bool, default `false`) — разрешить
+`run_command` из патча. Без него — `⛔ RUN заблокирован`.
 
-### Fallback
+**`command_whitelist`** (str, default `""`) — `"pytest,ruff,git"`.
+Пустой = все разрешены. Непустой = блокировать составные команды
+(`;`, `&&`, `|`, `$()`) если `command_allow_shell_operators=false`.
 
-Если embeddings backend недоступен:
-- `OptimizeWorker._make_rag_optimizer` ловит `RuntimeError`,
-  логирует warning, возвращает `ContextOptimizer` (BFS+PageRank)
-- Пользователь видит «⚠️ RAG недоступен…» в статус-баре
-- Задача выполняется через старую эвристику
+**`command_allow_shell_operators`** (bool, default `false`) — при
+непустом whitelist разрешать `pytest && ...`, `pytest | tail`.
 
-### Как включить
-
-```bash
-# вариант 1 — Ollama (лёгкий)
-ollama serve
-ollama pull nomic-embed-text
-
-# вариант 2 — LM Studio (OpenAI-совместимый)
-# 1. В LM Studio: Local Server → Start (localhost:1234)
-# 2. Загрузить embeddings-модель (например nomic-embed-text-v1.5)
-# 3. В PIG-T3: Настройки → LM Studio → Embeddings модель
-
-# вариант 3 — sentence-transformers (тяжёлый)
-uv sync --extra rag
-```
-
-Затем: **Генератор → ✨ Оптимизация контекста → ✅ Использовать RAG**.
-
-Embeddings-backend выбирается автоматически: **Ollama → LM Studio →
-sentence-transformers** (первый доступный).
-
-## Как добавить новую вкладку
-
-1. Создать `PIG_T3/gui_qt/tabs/<name>.py` с классом `<Name>Tab(QWidget)`.
-2. Экспортировать в `tabs/__init__.py`.
-3. Добавить ключ в `_TAB_KEYS` и `_TAB_TITLES` в `main_window.py`.
-4. В `_setup_tabs` добавить `elif key == "<name>": widget = <Name>Tab(...)`.
-5. В `closeEvent` — `if hasattr(widget, "stop_workers"): widget.stop_workers()` (если есть воркеры).
-6. Тесты: `<name>_tab` в `tests/gui_qt/`, smoke — добавить в `test_main_window_smoke.py`.
+**`quality_edit_retry_max`** (int, default 2) — сколько раундов
+`retry_with_context` пробовать в `PlanStepWorker`.

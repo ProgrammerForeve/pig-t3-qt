@@ -25,6 +25,7 @@ from .config_compat import save_migrated
 from .dialogs.settings_dialog import SettingsDialog
 from .tabs.editor import EditorTab
 from .tabs.generator import GeneratorTab
+from .tabs.history import HistoryTab
 from .tabs.info import InfoTab
 from .tabs.plan import PlanTab
 from .tabs.quality import QualityTab
@@ -32,7 +33,7 @@ from .tabs.quality import QualityTab
 log = logging.getLogger("pig_t3.gui_qt.main_window")
 
 
-_TAB_KEYS = ["generator", "info", "editor", "plan", "quality"]
+_TAB_KEYS = ["generator", "info", "editor", "plan", "quality", "history"]
 
 _TAB_TITLES = {
     "generator": "🏠 Генератор",
@@ -40,6 +41,7 @@ _TAB_TITLES = {
     "editor": "✏️ Редактор (JSON Patcher)",
     "plan": "📝 План проекта",
     "quality": "📊 Анализ кода",
+    "history": "🕐 История",
 }
 
 
@@ -105,8 +107,8 @@ class MainWindow(QMainWindow):
                 widget = QualityTab(self.settings)
             elif key == "plan":
                 widget = PlanTab(self.settings)
-            else:
-                widget = self._make_placeholder(_TAB_TITLES[key])
+            elif key == "history":
+                widget = HistoryTab(self.settings)
 
             self._tab_widgets[key] = widget
             self.tabs.addTab(widget, _TAB_TITLES[key])
@@ -125,7 +127,7 @@ class MainWindow(QMainWindow):
         # до первого settings_changed от Генератора.
         _root = self.settings.get("root_folder", "")
         if _root:
-            for _key in ("editor", "quality", "plan"):
+            for _key in ("editor", "quality", "plan", "history"):
                 _w = self._tab_widgets.get(_key)
                 if _w is not None and hasattr(_w, "set_path"):
                     _w.set_path(_root)
@@ -241,7 +243,7 @@ class MainWindow(QMainWindow):
                 return
             self.settings.update(generator.collect_settings())
             root = self.settings.get("root_folder", "")
-            for key in ("editor", "quality", "plan"):
+            for key in ("editor", "quality", "plan", "history"):
                 widget = self._tab_widgets.get(key)
                 if widget is not None and hasattr(widget, "set_path"):
                     try:

@@ -231,6 +231,7 @@ class SettingsDialog(QDialog):
             "editor": QCheckBox("✏️ Редактор (JSON Patcher)"),
             "plan": QCheckBox("📝 План проекта"),
             "quality": QCheckBox("📊 Анализ кода"),
+            "history": QCheckBox("🕐 История"),
         }
         for cb in self.vis_checks.values():
             vis_layout.addWidget(cb)

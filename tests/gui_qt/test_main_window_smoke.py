@@ -39,8 +39,8 @@ def window(qtbot, tmp_path, monkeypatch):
     return w
 
 
-def test_all_five_tabs_present(window):
-    assert window.tabs.count() == 5
+def test_all_six_tabs_present(window):
+    assert window.tabs.count() == 6
 
 
 def test_generator_is_pyside6(window):

@@ -14,7 +14,7 @@ if [ "${1:-}" = "--cov" ]; then
     echo "==> pytest + coverage"
     PIG_NO_EXIT=1 uv run pytest tests/ -q \
         --timeout=60 --timeout-method=thread \
-        --cov=PIG_T3 --cov-report=term-missing --cov-fail-under=67 \
+        --cov=PIG_T3 --cov-report=term-missing --cov-fail-under=70 \
         2>&1 | tail -n 40
     # PIG_NO_EXIT=1 → pytest-cov печатает отчёт, но возможен
     # 'free(): invalid size' на Qt shutdown. Реальный exit code

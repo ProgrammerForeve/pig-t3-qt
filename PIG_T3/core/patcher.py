@@ -934,17 +934,24 @@ def apply_llm_changes(
                         f"{', '.join(commands)} (exit=0)"
                     )
                 else:
-                    _failed = next(
+                    _failed_idx = next(
                         (
-                            c
-                            for c, _r in _results
+                            i
+                            for i, (_, _r) in enumerate(_results)
                             if isinstance(_r, Exception) or not _r.ok
                         ),
-                        "?",
+                        -1,
                     )
-                    changes_log.append(
-                        f"❌ RUN {_ok}/{_total}: {_failed} (failed)"
-                    )
+                    if 0 <= _failed_idx < len(commands):
+                        changes_log.append(
+                            f"❌ RUN {_ok}/{_total}: "
+                            f"[{_failed_idx + 1}] {commands[_failed_idx]} "
+                            f"(failed)"
+                        )
+                    else:
+                        changes_log.append(
+                            f"❌ RUN {_ok}/{_total}: (failed)"
+                        )
                     try:
                         from .command_runner import summarize_output
                     except ImportError:
