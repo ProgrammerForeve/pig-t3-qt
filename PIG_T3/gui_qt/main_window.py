@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
                     resume_watcher_cb=getattr(gen_tab, "resume_file_watcher", None),
                 )
             elif key == "quality":
-                widget = QualityTab()
+                widget = QualityTab(self.settings)
             elif key == "plan":
                 widget = PlanTab(self.settings)
             else:

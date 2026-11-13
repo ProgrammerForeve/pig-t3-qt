@@ -445,7 +445,7 @@ class EditorTab(QWidget):
         import re as _re
 
         from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices, QGuiApplication
+        from PySide6.QtGui import QDesktopServices
         from PySide6.QtWidgets import (
             QDialog,
             QFileDialog,
@@ -468,7 +468,9 @@ class EditorTab(QWidget):
         output_paths = _re.findall(r"📄 output:\s*(\S+\.log)", log)
 
         def _copy_visible() -> None:
-            QGuiApplication.clipboard().setText(text.toPlainText())
+            from ...utils.clipboard_text import copy_text_to_clipboard
+
+            copy_text_to_clipboard(text.toPlainText())
 
         def _copy_all() -> None:
             parts = [log]
@@ -480,7 +482,9 @@ class EditorTab(QWidget):
                         parts.append(f"\n\n=== {rel} ===\n{f.read()}")
                 except Exception as exc:
                     parts.append(f"\n\n=== {rel} ===\n(не удалось прочитать: {exc})")
-            QGuiApplication.clipboard().setText("\n".join(parts))
+            from ...utils.clipboard_text import copy_text_to_clipboard
+
+            copy_text_to_clipboard("\n".join(parts))
 
         def _open_last_log() -> None:
             if not output_paths:

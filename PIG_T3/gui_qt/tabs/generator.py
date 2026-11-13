@@ -953,7 +953,22 @@ class GeneratorTab(QWidget):
             if copy_file_to_clipboard_windows(path):
                 msg += "\n\n📋 ФАЙЛ СКОПИРОВАН В БУФЕР!"
             else:
-                msg += "\n\n⚠️ Не удалось скопировать файл в буфер."
+                # Fallback (Linux/macOS): копируем СОДЕРЖИМОЕ как текст
+                from ...utils.clipboard_text import copy_text_to_clipboard
+
+                try:
+                    with open(path, encoding="utf-8", errors="replace") as _f:
+                        _content = _f.read()
+                    if copy_text_to_clipboard(_content):
+                        msg += "\n\n📋 СОДЕРЖИМОЕ отчёта в буфере (файл целиком — только Windows)."
+                    else:
+                        msg += (
+                            "\n\n⚠️ Не удалось скопировать в буфер. "
+                            "Установите xclip (Linux X11) или "
+                            "wl-clipboard (Wayland)."
+                        )
+                except OSError:
+                    msg += "\n\n⚠️ Не удалось прочитать файл для буфера."
         _show_info_dialog(self, "Успех", msg)
 
     def _show_error_dialog(self, msg: str) -> None:

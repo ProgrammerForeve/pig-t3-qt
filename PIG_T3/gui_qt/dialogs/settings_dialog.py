@@ -247,6 +247,33 @@ class SettingsDialog(QDialog):
         git_form.addRow(self.git_push_cb)
         layout.addWidget(git_group)
 
+        quality_group = QGroupBox("📊 Анализ кода")
+        quality_form = QFormLayout(quality_group)
+        self.pylint_disable_edit = QLineEdit()
+        self.pylint_disable_edit.setPlaceholderText("C0114,C0115,C0116 (пусто = все правила)")
+        quality_form.addRow("Pylint disable:", self.pylint_disable_edit)
+        self.pylint_max_line_spin = QSpinBox()
+        self.pylint_max_line_spin.setRange(60, 300)
+        quality_form.addRow("Pylint max-line-length:", self.pylint_max_line_spin)
+        self.vulture_conf_spin = QSpinBox()
+        self.vulture_conf_spin.setRange(0, 100)
+        self.vulture_conf_spin.setSuffix("%")
+        quality_form.addRow("Vulture min-confidence:", self.vulture_conf_spin)
+        self.bandit_severity_combo = QComboBox()
+        self.bandit_severity_combo.addItems(["low", "medium", "high"])
+        quality_form.addRow("Bandit severity:", self.bandit_severity_combo)
+        self.tool_timeout_spin = QSpinBox()
+        self.tool_timeout_spin.setRange(10, 1800)
+        self.tool_timeout_spin.setSuffix(" сек")
+        quality_form.addRow("Таймаут на инструмент:", self.tool_timeout_spin)
+        self.context_lines_spin = QSpinBox()
+        self.context_lines_spin.setRange(0, 10)
+        self.context_lines_spin.setToolTip(
+            "Сколько строк кода вокруг L{line} добавить в задачу для LLM. 0 = только номера строк."
+        )
+        quality_form.addRow("Контекст строк (в задачу):", self.context_lines_spin)
+        layout.addWidget(quality_group)
+
         llm_group = QGroupBox("⚙️ Параметры LLM")
         llm_form = QFormLayout(llm_group)
         self.llm_timeout_spin = QSpinBox()
@@ -320,6 +347,14 @@ class SettingsDialog(QDialog):
         self.plan_step_tokens_spin.setValue(int(s.get("plan_step_limit_tokens", 15000)))
         self.plan_gen_tokens_spin.setValue(int(s.get("plan_generation_limit_tokens", 12000)))
         self.quality_chunk_spin.setValue(int(s.get("quality_scan_chunk_size", 50)))
+        self.pylint_disable_edit.setText(s.get("quality_pylint_disable", ""))
+        self.pylint_max_line_spin.setValue(int(s.get("quality_pylint_max_line_length", 120)))
+        self.vulture_conf_spin.setValue(int(s.get("quality_vulture_min_confidence", 60)))
+        _sev = s.get("quality_bandit_severity", "medium")
+        if _sev in ("low", "medium", "high"):
+            self.bandit_severity_combo.setCurrentText(_sev)
+        self.tool_timeout_spin.setValue(int(s.get("quality_tool_timeout", 120)))
+        self.context_lines_spin.setValue(int(s.get("quality_context_lines", 0)))
 
     def _connect_signals(self) -> None:
         self.btn_save.clicked.connect(self._on_save)
@@ -362,6 +397,12 @@ class SettingsDialog(QDialog):
         s["plan_step_limit_tokens"] = self.plan_step_tokens_spin.value()
         s["plan_generation_limit_tokens"] = self.plan_gen_tokens_spin.value()
         s["quality_scan_chunk_size"] = self.quality_chunk_spin.value()
+        s["quality_pylint_disable"] = self.pylint_disable_edit.text().strip()
+        s["quality_pylint_max_line_length"] = self.pylint_max_line_spin.value()
+        s["quality_vulture_min_confidence"] = self.vulture_conf_spin.value()
+        s["quality_bandit_severity"] = self.bandit_severity_combo.currentText()
+        s["quality_tool_timeout"] = self.tool_timeout_spin.value()
+        s["quality_context_lines"] = self.context_lines_spin.value()
 
         self.accept()
 

@@ -11,10 +11,24 @@ log = logging.getLogger("pig_t3.core.quality.scanner")
 
 
 class ProjectScanner:
-    def __init__(self, root_path: str, chunk_size: int = 50):
+    def __init__(
+        self,
+        root_path: str,
+        chunk_size: int = 50,
+        pylint_disable: str = "",
+        pylint_max_line_length: int = 120,
+        vulture_min_confidence: int = 60,
+        bandit_severity: str = "medium",
+        tool_timeout: int = 120,
+    ):
         self.root = os.path.abspath(root_path)
         self.python_exe = sys.executable
         self.chunk_size = chunk_size
+        self.pylint_disable = pylint_disable
+        self.pylint_max_line_length = pylint_max_line_length
+        self.vulture_min_confidence = vulture_min_confidence
+        self.bandit_severity = bandit_severity
+        self.tool_timeout = tool_timeout
 
     def _get_rel_path(self, path: str) -> str:
         """
@@ -112,7 +126,10 @@ class ProjectScanner:
 
                 cmd = [self.python_exe, "-m", "radon", "cc", "-j", "-a"] + chunk
                 try:
-                    out = subprocess.check_output(cmd, cwd=self.root, encoding='utf-8', errors='replace')
+                    out = subprocess.check_output(
+                        cmd, cwd=self.root, encoding='utf-8',
+                        errors='replace', timeout=self.tool_timeout,
+                    )
                     data, _ = json.JSONDecoder().raw_decode(out)
 
                     for filename, metrics in data.items():
@@ -139,7 +156,10 @@ class ProjectScanner:
 
                 cmd = [self.python_exe, "-m", "radon", "mi", "-j"] + chunk
                 try:
-                    out = subprocess.check_output(cmd, cwd=self.root, encoding='utf-8', errors='replace')
+                    out = subprocess.check_output(
+                        cmd, cwd=self.root, encoding='utf-8',
+                        errors='replace', timeout=self.tool_timeout,
+                    )
                     data, _ = json.JSONDecoder().raw_decode(out)
 
                     for filename, metric_data in data.items():
@@ -159,11 +179,19 @@ class ProjectScanner:
                 pct = 45 + int(35 * (idx / len(chunks)))
                 notify(pct, f"Pylint: пакет {idx + 1}/{len(chunks)}...")
 
-                cmd = [self.python_exe, "-m", "pylint", "--output-format=json", "--exit-zero"] + chunk
+                cmd = [
+                    self.python_exe, "-m", "pylint",
+                    "--output-format=json", "--exit-zero",
+                    f"--max-line-length={self.pylint_max_line_length}",
+                ]
+                if self.pylint_disable:
+                    cmd.append(f"--disable={self.pylint_disable}")
+                cmd += chunk
 
                 # Using subprocess.run is safer than check_output for pylint as it returns non-zero often
                 proc = subprocess.run(
-                    cmd, capture_output=True, text=True, encoding='utf-8', errors='replace'
+                    cmd, capture_output=True, text=True, encoding='utf-8',
+                    errors='replace', timeout=self.tool_timeout,
                 )
 
                 if proc.stdout.strip() and (proc.stdout.startswith('[') or proc.stdout.startswith('{')):
@@ -203,12 +231,16 @@ class ProjectScanner:
         notify(80, "Поиск мертвого кода (Vulture)...")
         try:
             # Vulture runs faster on all files at once usually
-            cmd = [self.python_exe, "-m", "vulture"] + python_files_abs
+            cmd = [
+                self.python_exe, "-m", "vulture",
+                f"--min-confidence={self.vulture_min_confidence}",
+            ] + python_files_abs
 
             # Simple heuristic guard if too many files
             if len(python_files_abs) < 500:
                 proc = subprocess.run(
-                    cmd, capture_output=True, text=True, encoding='utf-8', errors='replace'
+                    cmd, capture_output=True, text=True, encoding='utf-8',
+                    errors='replace', timeout=self.tool_timeout,
                 )
                 for line in proc.stdout.splitlines():
                     parts = line.split(':', 2)
@@ -228,11 +260,15 @@ class ProjectScanner:
         # 7. Bandit
         notify(90, "Аудит безопасности (Bandit)...")
         try:
-            cmd = [self.python_exe, "-m", "bandit", "-f", "json"] + python_files_abs
+            cmd = [
+                self.python_exe, "-m", "bandit", "-f", "json",
+                f"--severity-level={self.bandit_severity}",
+            ] + python_files_abs
             # Bandit is usually fast enough, but if it hangs, we can add chunking later
             if len(python_files_abs) < 1000:
                 proc = subprocess.run(
-                    cmd, capture_output=True, text=True, encoding='utf-8', errors='replace'
+                    cmd, capture_output=True, text=True, encoding='utf-8',
+                    errors='replace', timeout=self.tool_timeout,
                 )
                 output = proc.stdout.strip()
                 if output.startswith("{"):

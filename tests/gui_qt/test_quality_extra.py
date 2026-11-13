@@ -23,7 +23,7 @@ def tab(qtbot):
 def test_compact_off_shows_all(tab):
     tab.set_metrics([FileMetrics(path="a.py")])
     tab.cb_compact.setChecked(False)
-    for i in range(6):
+    for i in range(7):
         assert not tab.table.isColumnHidden(i)
 
 
@@ -31,20 +31,20 @@ def test_compact_sort_changes_visible_columns(tab):
     tab.set_metrics([FileMetrics(path="a.py")])
     tab.cb_compact.setChecked(True)
     # default sort path -> visible path + cc
-    assert not tab.table.isColumnHidden(0)  # path
-    assert not tab.table.isColumnHidden(2)  # cc
-    assert tab.table.isColumnHidden(1)  # sloc
+    assert not tab.table.isColumnHidden(1)  # path
+    assert not tab.table.isColumnHidden(3)  # cc
+    assert tab.table.isColumnHidden(2)  # sloc
 
     tab._current_sort_col = "score"
     tab._apply_compact_view()
-    assert not tab.table.isColumnHidden(0)
-    assert not tab.table.isColumnHidden(4)  # score
-    assert tab.table.isColumnHidden(2)  # cc
+    assert not tab.table.isColumnHidden(1)
+    assert not tab.table.isColumnHidden(5)  # score
+    assert tab.table.isColumnHidden(6)  # sec (не в visible)
 
 
 def test_on_header_clicked_updates_sort_col(tab):
     tab.set_metrics([FileMetrics(path="a.py")])
-    tab._on_header_clicked(2)  # cc
+    tab._on_header_clicked(3)  # cc
     assert tab._current_sort_col == "cc"
 
 

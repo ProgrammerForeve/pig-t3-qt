@@ -20,24 +20,25 @@ def test_model_shape():
     from PySide6.QtCore import QModelIndex
 
     assert m.rowCount(QModelIndex()) == 2
-    assert m.columnCount(QModelIndex()) == 6
+    assert m.columnCount(QModelIndex()) == 7
 
 
 def test_model_headers():
     m = QualityTableModel()
     from PySide6.QtCore import Qt
 
-    assert m.headerData(0, Qt.Orientation.Horizontal) == "📄 Файл (Путь)"
-    assert "Сложность" in m.headerData(2, Qt.Orientation.Horizontal)
+    assert m.headerData(0, Qt.Orientation.Horizontal) == "✓"
+    assert m.headerData(1, Qt.Orientation.Horizontal) == "📄 Файл (Путь)"
+    assert "Сложность" in m.headerData(3, Qt.Orientation.Horizontal)
 
 
 def test_model_display_values():
     m = QualityTableModel([_m("a.py", sloc=5, complexity=2.5)])
     from PySide6.QtCore import Qt
 
-    assert m.data(m.index(0, 0), Qt.ItemDataRole.DisplayRole) == "a.py"
-    assert m.data(m.index(0, 1), Qt.ItemDataRole.DisplayRole) == "5"
-    assert m.data(m.index(0, 2), Qt.ItemDataRole.DisplayRole) == "2.5"
+    assert m.data(m.index(0, 1), Qt.ItemDataRole.DisplayRole) == "a.py"
+    assert m.data(m.index(0, 2), Qt.ItemDataRole.DisplayRole) == "5"
+    assert "2.5" in m.data(m.index(0, 3), Qt.ItemDataRole.DisplayRole)
 
 
 def test_model_foreground_uses_status():
@@ -45,7 +46,7 @@ def test_model_foreground_uses_status():
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor
 
-    brush = m.data(m.index(0, 2), Qt.ItemDataRole.ForegroundRole)
+    brush = m.data(m.index(0, 3), Qt.ItemDataRole.ForegroundRole)
     assert brush.color() == QColor("#e06c75")  # red
 
 
@@ -54,7 +55,7 @@ def test_model_sort_ascending():
     m = QualityTableModel(metrics)
     from PySide6.QtCore import Qt
 
-    m.sort(1, Qt.SortOrder.AscendingOrder)
+    m.sort(2, Qt.SortOrder.AscendingOrder)
     order = [x.path for x in m.all_metrics()]
     assert order == ["a.py", "b.py", "c.py"]
 
@@ -104,12 +105,13 @@ def test_compact_view_hides_columns(tab):
     tab.set_metrics([_m("a.py")])
     tab.cb_compact.setChecked(True)
     # при сортировке path видны path + cc
-    hidden = [tab.table.isColumnHidden(i) for i in range(6)]
-    assert hidden[0] is False  # path
-    assert hidden[2] is False  # cc
-    assert hidden[1] is True  # sloc
+    hidden = [tab.table.isColumnHidden(i) for i in range(7)]
+    assert hidden[0] is False  # check
+    assert hidden[1] is False  # path
+    assert hidden[2] is True  # sloc
+    assert hidden[3] is False  # cc
     tab.cb_compact.setChecked(False)
-    assert all(not h for h in [tab.table.isColumnHidden(i) for i in range(6)])
+    assert all(not h for h in [tab.table.isColumnHidden(i) for i in range(7)])
 
 
 def test_row_selection_shows_details(tab):

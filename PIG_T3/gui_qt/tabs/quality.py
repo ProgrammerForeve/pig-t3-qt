@@ -14,6 +14,7 @@ from PySide6.QtCore import QSortFilterProxyModel, Qt, QThread
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -30,7 +31,7 @@ from ...core.quality import FileMetrics
 from ..models.quality_table import QualityTableModel
 from ..workers.quality_worker import ScanWorker
 
-_COLUMNS = ["path", "sloc", "cc", "mi", "score", "sec"]
+_COLUMNS = ["check", "path", "sloc", "cc", "mi", "score", "sec"]
 _DETAIL_HEADER_STYLE = "font-size: 13px; font-weight: bold; padding: 4px; background: #0e639c; color: white;"
 
 
@@ -43,8 +44,9 @@ def _show_error(parent, title: str, text: str) -> None:
 
 
 class QualityTab(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, settings: dict | None = None, parent=None):
         super().__init__(parent)
+        self.settings = dict(settings or {})
         self._scan_thread: QThread | None = None
         self._scan_worker: ScanWorker | None = None
         self._current_sort_col: str = "path"
@@ -74,10 +76,21 @@ class QualityTab(QWidget):
         self.progress_bar.setVisible(False)
         self.progress_bar.setMaximumWidth(280)
         self.cb_compact = QCheckBox("Свёрнутый вид (только важные)")
+        self.btn_check_all = QPushButton("✓ Все")
+        self.btn_check_all.setToolTip("Отметить все файлы для группировки")
+        self.btn_check_all.setMaximumWidth(80)
+        self.btn_uncheck_all = QPushButton("☐ Ничего")
+        self.btn_uncheck_all.setToolTip("Снять все отметки")
+        self.btn_uncheck_all.setMaximumWidth(80)
+        self.btn_group_task = QPushButton("📋 В задачу")
+        self.btn_group_task.setToolTip("Сформировать задачу для LLM по выбранным файлам и скопировать в буфер")
 
         toolbar.addWidget(self.btn_scan)
         toolbar.addWidget(self.progress_bar)
         toolbar.addWidget(self.status_label, 1)
+        toolbar.addWidget(self.btn_check_all)
+        toolbar.addWidget(self.btn_uncheck_all)
+        toolbar.addWidget(self.btn_group_task)
         toolbar.addWidget(self.cb_compact)
         layout.addLayout(toolbar)
 
@@ -96,7 +109,12 @@ class QualityTab(QWidget):
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 28)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
         splitter.addWidget(self.table)
 
@@ -109,6 +127,9 @@ class QualityTab(QWidget):
     def _connect_signals(self) -> None:
         self.btn_scan.clicked.connect(self._on_scan_clicked)
         self.cb_compact.toggled.connect(self._apply_compact_view)
+        self.btn_check_all.clicked.connect(lambda: self._on_check_all(True))
+        self.btn_uncheck_all.clicked.connect(lambda: self._on_check_all(False))
+        self.btn_group_task.clicked.connect(self._on_group_task_clicked)
         self.table.selectionModel().currentRowChanged.connect(self._on_row_changed)
         self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
 
@@ -148,7 +169,7 @@ class QualityTab(QWidget):
         self.status_label.setText("Подготовка анализаторов...")
         self.details.setHtml("")
 
-        self._scan_worker = ScanWorker(path)
+        self._scan_worker = ScanWorker(path, settings=self.settings)
         self._scan_thread = QThread(self)
         self._scan_worker.moveToThread(self._scan_thread)
         self._scan_thread.started.connect(self._scan_worker.run)
@@ -200,7 +221,9 @@ class QualityTab(QWidget):
         reds = sum(1 for m in metrics if m.overall_status == "red")
         yellows = sum(1 for m in metrics if m.overall_status == "yellow")
         greens = total - reds - yellows
-        self.status_label.setText(f"Всего: {total} | 🔴 Critical: {reds} | ⚠️ Warnings: {yellows} | ✅ Clean: {greens}")
+        self.status_label.setText(
+            f"Всего: {total} | 🔴 {reds} | ⚠️ {yellows} | ✅ {greens} | Выбрано: {self.model.checked_count()}"
+        )
         self.status_label.setStyleSheet("color: #e06c75;" if reds > 0 else "color: #98c379;")
 
     # ---------- Details (T-503) ----------
@@ -276,8 +299,9 @@ class QualityTab(QWidget):
 
     def _apply_compact_view(self, *_args) -> None:
         if self.cb_compact.isChecked():
-            target = self._current_sort_col
-            visible = {"path", "cc"} if target == "path" else {"path", target}
+            visible = {"check", "path", "cc", "mi", "score"}
+            if self._current_sort_col in ("sloc", "sec"):
+                visible.add(self._current_sort_col)
             for i, col in enumerate(_COLUMNS):
                 self.table.setColumnHidden(i, col not in visible)
         else:
@@ -285,8 +309,110 @@ class QualityTab(QWidget):
                 self.table.setColumnHidden(i, False)
 
     def _on_header_clicked(self, column: int) -> None:
+        if not (0 <= column < len(_COLUMNS)):
+            return
+        if column == 0:
+            return  # чекбокс-колонка не сортирует
         self._current_sort_col = _COLUMNS[column]
         order = self.table.horizontalHeader().sortIndicatorOrder()
         self._sort_descending = order == Qt.SortOrder.DescendingOrder
+        self.proxy.sort(column, order)
         if self.cb_compact.isChecked():
             self._apply_compact_view()
+
+    def _on_check_all(self, checked: bool) -> None:
+        self.model.set_all_checked(checked)
+        self._update_stats(self.model.all_metrics())
+
+    def _on_group_task_clicked(self) -> None:
+        metrics = self.model.checked_metrics()
+        if not metrics:
+            metrics = self.model.all_metrics()
+        if not metrics:
+            _show_warning(self, "Внимание", "Нет данных — сначала запустите анализ.")
+            return
+        text = self._build_task_text(metrics)
+
+        from ...utils.clipboard_text import copy_text_to_clipboard
+
+        if not copy_text_to_clipboard(text):
+            _show_warning(
+                self,
+                "Внимание",
+                "Не удалось скопировать в буфер. Установите xclip (Linux X11) или wl-clipboard (Wayland).",
+            )
+            return
+        self.status_label.setText(f"📋 Задача скопирована в буфер ({len(metrics)} файлов)")
+
+    def _build_task_text(self, metrics: list) -> str:
+        red = [m for m in metrics if m.overall_status == "red"]
+        yellow = [m for m in metrics if m.overall_status == "yellow"]
+        green = [m for m in metrics if m.overall_status == "green"]
+
+        lines: list[str] = [
+            "# Задача: исправить проблемы качества кода",
+            "",
+            f"Всего файлов: {len(metrics)} (🔴 {len(red)}, ⚠️ {len(yellow)}, ✅ {len(green)})",
+            "",
+        ]
+
+        def _fmt_file(m) -> list[str]:
+            out = [
+                f"### `{m.path}`",
+                f"- Сложность: {m.complexity:.1f} ({m.status_cc})",
+                f"- Поддерж.: {m.maintainability:.1f} ({m.status_mi})",
+                f"- Pylint: {m.pylint_score:.1f} ({m.status_pylint})",
+                f"- Security: {m.security_issues} ({m.status_security})",
+            ]
+            if m.issues:
+                out.append("- Проблемы:")
+                _ctx_n = int(self.settings.get("quality_context_lines", 0) or 0)
+                for issue in m.issues[:20]:
+                    out.append(f"  - L{issue.line} [{issue.tool}] {issue.severity}: {issue.msg}")
+                    if _ctx_n > 0 and issue.line > 0:
+                        for ctx_ln in self._read_context(m.path, issue.line, _ctx_n):
+                            out.append(f"    {ctx_ln}")
+            return out
+
+        if red:
+            lines.append("## 🔴 Критичные")
+            lines.append("")
+            for m in red:
+                lines.extend(_fmt_file(m))
+                lines.append("")
+        if yellow:
+            lines.append("## 🟡 Предупреждения")
+            lines.append("")
+            for m in yellow:
+                lines.extend(_fmt_file(m))
+                lines.append("")
+        if green:
+            lines.append("## ✅ Чистые (можно не трогать)")
+            lines.append("")
+            for m in green:
+                lines.append(f"- `{m.path}`")
+            lines.append("")
+
+        lines.append("---")
+        lines.append("Верни JSON-патч с исправлениями (create/edit/run_command).")
+        return "\n".join(lines)
+
+    def _read_context(self, rel_path: str, line: int, n: int) -> list[str]:
+        """Прочитать строки line-N..line+N из файла (1-based)."""
+        root = self.path_edit.text().strip()
+        if not root or not os.path.isdir(root):
+            return []
+        full = os.path.join(root, rel_path)
+        try:
+            with open(full, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            return []
+        if not (1 <= line <= len(lines)):
+            return []
+        lo = max(1, line - n)
+        hi = min(len(lines), line + n)
+        return [f"L{i}: {lines[i - 1].rstrip()}" for i in range(lo, hi + 1)]
+        lines.append("---")
+        lines.append("Верни JSON-патч с исправлениями (create/edit/run_command).")
+        return "\n".join(lines)

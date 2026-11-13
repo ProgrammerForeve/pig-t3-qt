@@ -26,9 +26,22 @@ class ScanWorker(QObject):
         scanner: ProjectScanner | None = None,
         dep_check: Callable[[Callable[[str], None]], bool] | None = None,
         parent: QObject | None = None,
+        settings: dict | None = None,
     ):
         super().__init__(parent)
-        self._scanner = scanner if scanner is not None else ProjectScanner(root_path, chunk_size=chunk_size)
+        s = settings or {}
+        if scanner is not None:
+            self._scanner = scanner
+        else:
+            self._scanner = ProjectScanner(
+                root_path,
+                chunk_size=chunk_size,
+                pylint_disable=str(s.get("quality_pylint_disable", "")),
+                pylint_max_line_length=int(s.get("quality_pylint_max_line_length", 120)),
+                vulture_min_confidence=int(s.get("quality_vulture_min_confidence", 60)),
+                bandit_severity=str(s.get("quality_bandit_severity", "medium")),
+                tool_timeout=int(s.get("quality_tool_timeout", 120)),
+            )
         self._dep_check = dep_check
 
     def _is_interrupted(self) -> bool:
