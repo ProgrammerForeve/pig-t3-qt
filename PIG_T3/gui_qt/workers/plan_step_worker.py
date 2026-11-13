@@ -21,10 +21,9 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from ...core.patcher import apply_llm_changes, clean_json_text
 
-log = logging.getLogger("pig_t3.gui_qt.app")
+log = logging.getLogger("pig_t3.plan_step_worker")
 
 _EXEC_PROMPT = """You are a coding assistant executing a specific step of a project plan.
-log = logging.getLogger("pig_t3.plan_step_worker")
 
 FULL PROJECT PLAN:
 {plan_json}
@@ -192,13 +191,15 @@ class PlanStepWorker(QObject):
             env_block=env_block,
         )
 
-    def _default_apply(self, llm_text: str, root: str) -> str:
+    def _default_apply(self, llm_text: str, root: str, *, patch_context=None) -> str:
         return apply_llm_changes(
             llm_text,
             root,
             allow_command_execution=bool(self._settings.get("allow_command_execution", False)),
             command_whitelist=self._settings.get("command_whitelist", ""),
             command_default_timeout=int(self._settings.get("command_default_timeout", 120)),
+            command_allow_shell_operators=bool(self._settings.get("command_allow_shell_operators", False)),
+            patch_context=patch_context,
         )
 
     def _apply_mark_to_step(self, llm_response: str) -> bool:
@@ -217,71 +218,133 @@ class PlanStepWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        if self._is_interrupted():
+            self.cancelled.emit()
+            return
+        self.progress.emit(10, "Сбор контекста...")
+        context = self._build_context()
+        if self._is_interrupted():
+            self.cancelled.emit()
+            return
+
+        self.progress.emit(30, f"Запрос к {self._model_name}...")
+        llm = self._get_llm()
+        if llm is None:
+            self.error.emit(self._step, "Модель LLM не выбрана или недоступна")
+            return
+
+        prompt = self._build_prompt(context)
+        llm_response = llm.ask(prompt) or ""
+        if self._is_interrupted():
+            self.cancelled.emit()
+            return
+        if not llm_response:
+            self.error.emit(self._step, "LLM вернул пустой ответ")
+            return
+
+        if self._capture_llm_text:
+            try:
+                json.loads(clean_json_text(llm_response))
+            except Exception as e:
+                self.error.emit(self._step, f"Невалидный JSON: {e}")
+                return
+            self._step["_pending_llm_text"] = llm_response
+            self.progress.emit(100, "Готов к просмотру")
+            self.done.emit(self._step, "PREVIEW_PENDING")
+            return
+
+        max_rounds = max(0, int(self._max_retries))
+        full_log: list[str] = []
         last_error = ""
-        for attempt in range(self._max_retries + 1):
+
+        for round_idx in range(max_rounds + 1):
             if self._is_interrupted():
                 self.cancelled.emit()
                 return
+            self.progress.emit(60, "Валидация JSON...")
             try:
-                self.progress.emit(
-                    10,
-                    f"Сбор контекста (попытка {attempt + 1}/{self._max_retries + 1})...",
-                )
-                context = self._build_context()
-                if self._is_interrupted():
-                    self.cancelled.emit()
-                    return
+                json.loads(clean_json_text(llm_response))
+            except Exception as e:
+                last_error = f"Невалидный JSON: {e}"
+                if round_idx < max_rounds:
+                    if not self._sleep_cancellable(1.0):
+                        self.cancelled.emit()
+                        return
+                    llm_response = llm.ask(prompt) or ""
+                    if not llm_response:
+                        break
+                    continue
+                self.error.emit(self._step, last_error)
+                return
 
-                self.progress.emit(30, f"Запрос к {self._model_name}...")
-                llm = self._get_llm()
-                if llm is None:
-                    self.error.emit(self._step, "Модель LLM не выбрана или недоступна")
-                    return
+            self.progress.emit(
+                80,
+                f"Применение ({round_idx + 1}/{max_rounds + 1})...",
+            )
+            patch_ctx: dict = {}
+            try:
+                apply_log = self._apply_with_context(llm_response, patch_ctx)
+            except Exception as e:
+                last_error = str(e)
+                if round_idx < max_rounds:
+                    if not self._sleep_cancellable(1.0):
+                        self.cancelled.emit()
+                        return
+                    continue
+                self.error.emit(self._step, last_error)
+                return
 
-                prompt = self._build_prompt(context)
-                llm_response = llm.ask(prompt) or ""
-                if self._is_interrupted():
-                    self.cancelled.emit()
-                    return
-                if not llm_response:
-                    raise ValueError("LLM вернул пустой ответ")
+            full_log.append(f"=== round {round_idx + 1} ===\n{apply_log}")
 
-                self.progress.emit(60, "Валидация JSON...")
-                cleaned = clean_json_text(llm_response)
-                parsed = json.loads(cleaned)
-                if not isinstance(parsed, list):
-                    raise ValueError("JSON должен быть списком операций")
+            if "PIPELINE ABORTED" in apply_log:
+                self._step["status"] = "failed"
+                self._step["report"] = "\n".join(full_log)
+                self.error.emit(self._step, "Pipeline aborted")
+                return
 
-                if self._capture_llm_text:
-                    # Не применяем: PlanTab покажет diff, применит
-                    # после подтверждения. Отдаём llm_text через step.
-                    self._step["_pending_llm_text"] = llm_response
-                    self.progress.emit(100, "Готов к просмотру")
-                    self.done.emit(self._step, "PREVIEW_PENDING")
-                    return
-
-                self.progress.emit(80, "Применение изменений...")
-                apply_log = self._apply_func(llm_response, self._root)
-                if "PIPELINE ABORTED" in apply_log:
-                    self._step["status"] = "failed"
-                    self._step["report"] = apply_log
-                    self.error.emit(
-                        self._step,
-                        "Pipeline aborted: команда завершилась с ошибкой",
-                    )
-                    return
+            failed = patch_ctx.get("failed_edits", [])
+            reads = patch_ctx.get("read_requests", [])
+            if not failed and not reads:
                 has_mark = self._apply_mark_to_step(llm_response)
                 self._step["status"] = "completed" if has_mark else "pending"
                 if not self._step.get("report"):
-                    self._step["report"] = apply_log
-
+                    self._step["report"] = "\n".join(full_log)
                 self.progress.emit(100, "Готово")
-                self.done.emit(self._step, apply_log)
+                self.done.emit(self._step, "\n".join(full_log))
                 return
-            except Exception as e:
-                last_error = str(e)
-                if attempt < self._max_retries and not self._sleep_cancellable(1.0):
-                    self.cancelled.emit()
-                    return
 
-        self.error.emit(self._step, last_error or "Неизвестная ошибка")
+            if round_idx >= max_rounds:
+                break
+
+            self.progress.emit(70, f"Retry {round_idx + 1}/{max_rounds}")
+            from ...core.multi_turn import build_retry_prompt
+
+            retry_prompt = build_retry_prompt(
+                failed_edits=failed,
+                read_requests=reads,
+                original_response=llm_response,
+            )
+            llm_response = llm.ask(retry_prompt) or ""
+            if self._is_interrupted():
+                self.cancelled.emit()
+                return
+            if not llm_response:
+                break
+
+        self._step["status"] = "failed"
+        self._step["report"] = "\n".join(full_log)
+        self.error.emit(
+            self._step,
+            f"Retry не помог за {max_rounds + 1} раундов: {last_error}",
+        )
+
+    def _apply_with_context(self, response: str, patch_ctx: dict) -> str:
+        import inspect
+
+        try:
+            sig = inspect.signature(self._apply_func)
+            if "patch_context" in sig.parameters:
+                return self._apply_func(response, self._root, patch_context=patch_ctx)
+        except (TypeError, ValueError):
+            pass
+        return self._apply_func(response, self._root)

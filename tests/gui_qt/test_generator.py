@@ -772,7 +772,16 @@ def test_btn_optimize_opens_dialog(qtbot, tmp_path, monkeypatch):
         return QDialog.DialogCode.Rejected
 
     monkeypatch.setattr(gen_module.OptimizeDialog, "exec", _fake_exec)
-    ...
+    settings = {
+        "root_folder": str(tmp_path),
+        "extensions": ".py",
+        "ignore_list": "",
+        "output_name": "ctx",
+    }
+    tab = GeneratorTab(settings)
+    qtbot.addWidget(tab)
+    tab.btn_optimize.click()
+    assert opened, "OptimizeDialog.exec не вызван"
 
 
 def test_estimate_total_tokens_falls_back(qtbot, tmp_path):

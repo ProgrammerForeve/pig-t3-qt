@@ -207,6 +207,97 @@ def _safe_path(root_folder: str, rel_path: str) -> str | None:
         return None
     return target_abs
 
+
+def _toposort_actions(actions: list) -> list | str:
+    """Топологическая сортировка по depends_on (ADR-014)."""
+    has_deps = any(
+        isinstance(a, dict) and a.get("depends_on") for a in actions
+    )
+    if not has_deps:
+        return actions
+    by_id: dict[str, dict] = {
+        str(a["id"]): a
+        for a in actions
+        if isinstance(a, dict) and a.get("id")
+    }
+    state: dict[str, int] = {}
+    order: list[dict] = []
+    no_id = [
+        a for a in actions
+        if not (isinstance(a, dict) and a.get("id"))
+    ]
+
+    def visit(nid: str) -> bool:
+        s = state.get(nid)
+        if s == 1:
+            return True
+        if s == 0:
+            return False
+        state[nid] = 0
+        node = by_id[nid]
+        for dep in node.get("depends_on") or []:
+            d = str(dep)
+            if d in by_id and not visit(d):
+                return False
+        state[nid] = 1
+        order.append(node)
+        return True
+
+    for a in list(by_id.values()):
+        if state.get(str(a["id"])) != 1:
+            if not visit(str(a["id"])):
+                return (
+                    f"❌ Циклическая depends_on среди: "
+                    f"{sorted(by_id.keys())}"
+                )
+    return no_id + order
+
+
+def _rollback_patch(
+    root_folder: str, backup_dir: str, log: list[str]
+) -> None:
+    """Откатить before/ и удалить созданные (after без before). ADR-014."""
+    before = os.path.join(backup_dir, "before")
+    after = os.path.join(backup_dir, "after")
+    root = os.path.abspath(root_folder)
+
+    def _files(base: str) -> list[str]:
+        out: list[str] = []
+        if not os.path.isdir(base):
+            return out
+        for dp, _d, fs in os.walk(base):
+            for f in fs:
+                out.append(
+                    os.path.relpath(os.path.join(dp, f), base)
+                    .replace("\\", "/")
+                )
+        return out
+
+    for rel in _files(after):
+        if not os.path.exists(os.path.join(before, rel)):
+            target = os.path.join(root, rel)
+            try:
+                if os.path.isdir(target):
+                    shutil.rmtree(target)
+                elif os.path.exists(target):
+                    os.remove(target)
+                log.append(f"⏪ Rollback delete: {rel}")
+            except OSError as e:
+                log.append(f"⚠️ Rollback delete {rel}: {e}")
+
+    for rel in _files(before):
+        src = os.path.join(before, rel)
+        dst = os.path.join(root, rel)
+        try:
+            os.makedirs(os.path.dirname(dst) or root, exist_ok=True)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
+            log.append(f"⏪ Rollback restore: {rel}")
+        except OSError as e:
+            log.append(f"⚠️ Rollback restore {rel}: {e}")
+
 def clean_json_text(text):
     """
     Пытается очистить текст от Markdown оберток ```json ... ``` и найти валидный JSON список.
@@ -236,6 +327,7 @@ def apply_llm_changes(
     command_allow_shell_operators: bool = False,
     runner=None,
     patch_context: dict | None = None,
+    backup_dir: str | None = None,
 ):
     """
     Применяет изменения на основе JSON-ответа от LLM.
@@ -255,12 +347,50 @@ def apply_llm_changes(
     if not isinstance(actions, list):
         return "❌ JSON должен быть списком объектов (операций)."
 
+    for _a in actions:
+        if not isinstance(_a, dict):
+            continue
+        if _a.get("command") and _a.get("commands"):
+            return (
+                f"❌ run_command: укажите 'command' или 'commands', не оба "
+                f"(взаимоисключающие; id={_a.get('id')})"
+            )
+
+    _ids = [
+        str(a["id"])
+        for a in actions
+        if isinstance(a, dict) and a.get("id")
+    ]
+    if len(_ids) != len(set(_ids)):
+        _dupes = sorted({x for x in _ids if _ids.count(x) > 1})
+        return f"❌ Дублирующиеся id в патче: {_dupes}"
+    _sorted = _toposort_actions(actions)
+    if isinstance(_sorted, str):
+        return _sorted
+    actions = _sorted
+
     success_count = 0
     _failed_edits: list[FailedEdit] = []
     _read_requests: list[dict] = []
+    applied: dict[str, str] = {}
 
     for action in actions:
         action_type = action.get('action')
+        _aid = action.get("id")
+        _deps = action.get("depends_on") or []
+        if _deps and any(applied.get(str(d)) != "ok" for d in _deps):
+            _missing = [
+                str(d) for d in _deps
+                if applied.get(str(d)) != "ok"
+            ]
+            changes_log.append(
+                f"⏭ Skip {_aid or '?'}: deps not ok {_missing}"
+            )
+            if _aid:
+                applied[str(_aid)] = "skipped"
+            continue
+
+        _start = len(changes_log)
 
         if not action_type:
             changes_log.append("⚠️ Пропущен action в блоке.")
@@ -504,6 +634,8 @@ def apply_llm_changes(
                 f"📖 read_lines {rel_path}: L{_lo}-{_hi} "
                 f"({len(_rw_lines)} строк)"
             )
+            if action.get("id"):
+                applied[str(action["id"])] = "ok"
             continue
 
         elif action_type == 'edit':
@@ -514,6 +646,20 @@ def apply_llm_changes(
             abs_path = safe
             if not os.path.exists(abs_path):
                 changes_log.append(f"❌ Edit: файл не найден {rel_path}")
+                _aid_edit = action.get("id")
+                if _aid_edit:
+                    applied[str(_aid_edit)] = "failed"
+                if action.get("on_failure") in ("abort", "rollback"):
+                    if (
+                        action.get("on_failure") == "rollback"
+                        and backup_dir
+                    ):
+                        _rollback_patch(
+                            root_folder, backup_dir, changes_log
+                        )
+                    aborted = True
+                    changes_log.append("⏹ PIPELINE ABORTED")
+                    break
                 continue
 
             operations = action.get('operations', [])
@@ -854,6 +1000,30 @@ def apply_llm_changes(
                 aborted = True
                 changes_log.append("⏹ PIPELINE ABORTED")
                 break
+        _slice = changes_log[_start:]
+        _fail = any(
+            s.startswith(("❌", "⛔", "⚠️")) for s in _slice
+        )
+        _ok = any(
+            s.startswith((
+                "✅", "🗑️", "🚚", "⚙️", "✏️", "➕", "📖",
+                "ℹ️", "📄", "📝", "⏭", "🔄",
+            ))
+            for s in _slice
+        )
+        _is_ok = _ok and not _fail
+        if _aid:
+            applied[str(_aid)] = "ok" if _is_ok else "failed"
+        if not _is_ok and action.get("on_failure") in ("abort", "rollback"):
+            if action.get("on_failure") == "rollback" and backup_dir:
+                _rollback_patch(root_folder, backup_dir, changes_log)
+            aborted = True
+            changes_log.append("⏹ PIPELINE ABORTED")
+            break
+        if _is_ok and action.get("on_success") == "abort":
+            changes_log.append("⏹ PIPELINE ABORTED (on_success)")
+            aborted = True
+            break
 
     if patch_context is not None:
         patch_context["failed_edits"] = _failed_edits

@@ -177,6 +177,17 @@ class ProjectAnalyzer:
             )
 
         instructions.extend([
+            "FLOW CONTROL (all actions, ADR-014):",
+            "- 'id' (string): unique action id, referenced by depends_on.",
+            "- 'on_failure': 'continue' (default) | 'abort' | 'rollback' (abort + restore before/).",
+            "- 'on_success': 'continue' (default) | 'abort'.",
+            "- 'depends_on': [id, ...] — action runs only if ALL deps succeeded. Skip is transitive (A fail → B skipped → C skipped).",
+            "Example:",
+            '[{"id":"e1","action":"edit","path":"a.py","operations":[...]},',
+            ' {"id":"e2","action":"edit","path":"b.py","operations":[...]},',
+            ' {"id":"t","action":"run_command","command":"pytest -q",',
+            '  "depends_on":["e1","e2"],"on_failure":"rollback"}]',
+            "",
             "🛑 ANTI-DESTRUCTION SHIELD (CRITICAL):",
             "ALWAYS use 'edit' for existing files! NEVER use 'create' to overwrite an entire existing file to change a few lines.",
             "IMPORTANT: When using 'replace_lines', do not include unchanged neighboring lines (context) in 'content'. It leads to duplication!"

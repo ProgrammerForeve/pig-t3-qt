@@ -110,12 +110,16 @@ class ApplyWorker(QObject):
             after = os.path.join(backup_root, "after")
 
             _copy_paths(self._root, before, filtered)
+            patch_ctx: dict = {}
             log = apply_llm_changes(
                 self._llm_text,
                 self._root,
                 allow_command_execution=bool(self._settings.get("allow_command_execution", False)),
                 command_whitelist=self._settings.get("command_whitelist", ""),
                 command_default_timeout=int(self._settings.get("command_default_timeout", 120)),
+                command_allow_shell_operators=bool(self._settings.get("command_allow_shell_operators", False)),
+                patch_context=patch_ctx,
+                backup_dir=backup_root,
             )
             _copy_paths(self._root, after, filtered)
 
@@ -123,7 +127,11 @@ class ApplyWorker(QObject):
                 "id": patch_id,
                 "paths": filtered,
                 "llm_text": self._llm_text,
+                "_patch_ctx": patch_ctx,
             }
+            if "PIPELINE ABORTED" in log:
+                self.error.emit("PIPELINE ABORTED — изменения применены частично, см. лог")
+                return
             self.done.emit(log, record)
         except Exception as e:
             self.error.emit(str(e))

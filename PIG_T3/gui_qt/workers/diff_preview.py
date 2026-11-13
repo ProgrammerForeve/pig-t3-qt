@@ -32,12 +32,14 @@ class FileDiff:
 
 @dataclass
 class CommandSpec:
-    """Команда из JSON-патча для предпросмотра."""
+    """Команда из JSON-патча для предпросмотра (ADR-017)."""
 
     command: str
     output_path: str | None = None
     timeout_sec: int = 120
     on_failure: str = "continue"
+    batch_index: int | None = None  # 0-based, None если одиночная
+    batch_size: int = 1
 
 
 def _extract_paths(data: list[dict]) -> list[str]:
@@ -186,7 +188,7 @@ def compute_diffs(llm_text: str, root_folder: str) -> list[FileDiff]:
 
 
 def extract_commands(llm_text: str) -> list[CommandSpec]:
-    """Извлечь все run_command из JSON. Никогда не бросает."""
+    """Извлечь все run_command из JSON (включая batch, ADR-017)."""
     try:
         data = json.loads(clean_json_text(llm_text))
     except (json.JSONDecodeError, ValueError, TypeError):
@@ -199,19 +201,34 @@ def extract_commands(llm_text: str) -> list[CommandSpec]:
             continue
         if action.get("action") != "run_command":
             continue
-        cmd = action.get("command", "")
-        if not cmd or not isinstance(cmd, str):
-            continue
         try:
             timeout = int(action.get("timeout_sec", 120))
         except (TypeError, ValueError):
             timeout = 120
-        result.append(
-            CommandSpec(
-                command=cmd,
-                output_path=action.get("output_path"),
-                timeout_sec=timeout,
-                on_failure=str(action.get("on_failure", "continue")),
+        on_failure = str(action.get("on_failure", "continue"))
+        output_path = action.get("output_path")
+        single = action.get("command")
+        batch = action.get("commands")
+        if batch and isinstance(batch, list):
+            clean = [c for c in batch if isinstance(c, str) and c.strip()]
+            for i, c in enumerate(clean):
+                result.append(
+                    CommandSpec(
+                        command=c,
+                        output_path=output_path,
+                        timeout_sec=timeout,
+                        on_failure=on_failure,
+                        batch_index=i,
+                        batch_size=len(clean),
+                    )
+                )
+        elif isinstance(single, str) and single.strip():
+            result.append(
+                CommandSpec(
+                    command=single,
+                    output_path=output_path,
+                    timeout_sec=timeout,
+                    on_failure=on_failure,
+                )
             )
-        )
     return result

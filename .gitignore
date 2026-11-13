@@ -1,4 +1,5 @@
 .venv
+.pig/history_tree.json
 .pig
 *.pyc
 check.log

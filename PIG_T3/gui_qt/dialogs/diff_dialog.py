@@ -81,7 +81,10 @@ class DiffDialog(QDialog):
                 QListWidgetItem(f"{icon}  {d.path}", self.file_list)
             for c in self._commands:
                 tag = "⏹" if c.on_failure == "abort" else "▶"
-                QListWidgetItem(f"{tag}  $ {c.command}", self.file_list)
+                bpfx = (
+                    f"[{c.batch_index + 1}/{c.batch_size}] " if c.batch_index is not None and c.batch_size > 1 else ""
+                )
+                QListWidgetItem(f"{tag}  {bpfx}$ {c.command}", self.file_list)
             self.file_list.currentRowChanged.connect(self._on_file_selected)
             splitter.addWidget(self.file_list)
 
@@ -132,12 +135,17 @@ class DiffDialog(QDialog):
             self.diff_view.clear()
             return
         c = self._commands[cmd_idx]
-        lines = [
-            f"$ {c.command}",
-            "",
-            f"timeout: {c.timeout_sec}s",
-            f"on_failure: {c.on_failure}",
-        ]
+        lines: list[str] = []
+        if c.batch_index is not None and c.batch_size > 1:
+            lines.append(f"[batch {c.batch_index + 1}/{c.batch_size}]")
+        lines.extend(
+            [
+                f"$ {c.command}",
+                "",
+                f"timeout: {c.timeout_sec}s",
+                f"on_failure: {c.on_failure}",
+            ]
+        )
         if c.output_path:
             lines.append(f"output_path: {c.output_path}")
         else:

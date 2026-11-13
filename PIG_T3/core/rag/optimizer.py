@@ -50,8 +50,7 @@ class RagOptimizer:
         self._indexer = ProjectIndexer(
             self._root, self._backend, db_path=db_path
         )
-        self._backend = backend or make_embeddings_backend(backend_pref)
-        ...
+
     def optimize(
         self,
         progress_callback: Callable[[int, str], None] | None = None,

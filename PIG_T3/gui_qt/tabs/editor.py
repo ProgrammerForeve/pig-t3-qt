@@ -98,6 +98,7 @@ class EditorTab(QWidget):
         self.history_stack: list[dict] = []
         self.redo_stack: list[dict] = []
         self._last_applied_content: str | None = None
+        self._last_patch_record: dict | None = None
         self._current_path: str = self.settings.get("root_folder", "")
 
         self._apply_thread: QThread | None = None
@@ -433,6 +434,7 @@ class EditorTab(QWidget):
                 )
         self.redo_stack.clear()
         self._update_undo_redo()
+        self._last_patch_record = record
         self._show_result_dialog(log)
 
     def _on_apply_error(self, msg: str) -> None:
@@ -441,6 +443,7 @@ class EditorTab(QWidget):
 
     def _show_result_dialog(self, log: str) -> None:
         """Окно результата патча: лог + полные .pig/cmd/*.log по кнопке."""
+        record = self._last_patch_record
         import os
         import re as _re
 
@@ -528,6 +531,12 @@ class EditorTab(QWidget):
         btn_save.clicked.connect(_save_to_file)
         btn_row.addWidget(btn_save)
 
+        if record and record.get("_patch_ctx", {}).get("needs_retry"):
+            btn_retry = QPushButton("🔧 Retry с контекстом")
+            btn_retry.setToolTip("Повторить упавшие edits через LLM с подсказкой контекста (ADR-016)")
+            btn_retry.clicked.connect(lambda: self._on_retry_with_context(record))
+            btn_row.addWidget(btn_retry)
+
         btn_row.addStretch(1)
         btn_close = QPushButton("Закрыть")
         btn_close.setDefault(True)
@@ -537,6 +546,53 @@ class EditorTab(QWidget):
 
         dlg.exec()
         dlg.deleteLater()
+
+    def _on_retry_with_context(self, record: dict) -> None:
+        ctx = record.get("_patch_ctx", {})
+        if not ctx.get("needs_retry"):
+            return
+        from ...core.multi_turn import build_retry_prompt
+
+        prompt = build_retry_prompt(
+            failed_edits=ctx.get("failed_edits", []),
+            read_requests=ctx.get("read_requests", []),
+            original_response=record.get("llm_text", ""),
+        )
+        model = self.model_combo.currentText()
+        if model in ("", "None"):
+            from ...utils.clipboard_text import copy_text_to_clipboard
+
+            copy_text_to_clipboard(prompt)
+            _show_info(
+                self,
+                "Retry-промпт скопирован",
+                "Модель не выбрана — промпт в буфере. Вставьте в чат с LLM.",
+            )
+            return
+        try:
+            from ..workers.llm_wrappers import make_llm_client
+
+            llm = make_llm_client(model, self, self.settings)
+        except Exception as e:
+            _show_error(self, "Ошибка LLM", str(e))
+            return
+        if llm is None:
+            _show_error(self, "Ошибка LLM", f"Модель '{model}' недоступна")
+            return
+        self.status_label.setText(f"🔧 Retry с контекстом ({model})...")
+        try:
+            response = llm.ask(prompt) or ""
+        except Exception as e:
+            self.status_label.setText(f"❌ Retry: {e}")
+            _show_error(self, "Ошибка Retry", str(e))
+            return
+        if not response:
+            self.status_label.setText("❌ Retry: пустой ответ")
+            return
+        self.editor_text.setPlainText(response)
+        self._last_applied_content = None
+        if self._on_validate():
+            self._on_apply()
 
     def _on_undo(self) -> None:
         if not self.history_stack:

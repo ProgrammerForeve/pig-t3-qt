@@ -413,6 +413,3 @@ class QualityTab(QWidget):
         lo = max(1, line - n)
         hi = min(len(lines), line + n)
         return [f"L{i}: {lines[i - 1].rstrip()}" for i in range(lo, hi + 1)]
-        lines.append("---")
-        lines.append("Верни JSON-патч с исправлениями (create/edit/run_command).")
-        return "\n".join(lines)

@@ -43,8 +43,6 @@ class ContextOptimizer:
         self.dep_graph = DependencyGraph(root_folder)
         self.all_files = []
         self.file_metadata = {}
-        self.all_files = []
-        self.file_metadata = {}
 
     def optimize(self, progress_callback=None, fallback_callback=None) -> List[str]:
         if progress_callback:
@@ -91,8 +89,6 @@ class ContextOptimizer:
                             selected_set.add(f)
                             selected_files.append(f)
                             current_tokens += tok
-
-                        mod = self.dep_graph.file_to_module.get(f)
 
                         mod = self.dep_graph.file_to_module.get(f)
                         if mod:
