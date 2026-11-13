@@ -1,11 +1,12 @@
+import difflib
 import json
 import logging
 import os
 import re
+import shutil
+from dataclasses import dataclass, field
 
 log = logging.getLogger("pig_t3.patcher")
-
-import shutil
 
 
 def _parse_regex_find(find_str: str) -> tuple[str, int] | None:
@@ -136,6 +137,60 @@ def _apply_replace_text(
         full_text[: match.start()] + adapted + full_text[match.end():]
     )
     return new_text, True, "flexible"
+@dataclass
+class FailedEdit:
+    """Описание упавшего edit для retry_with_context."""
+
+    path: str
+    find: str
+    replace: str
+    error: str
+    best_match_line: int | None = None
+    best_match_ratio: float = 0.0
+    context_lines: list[str] = field(default_factory=list)
+    total_lines: int = 0
+
+
+def _find_near_match(
+    full_text: str, find_str: str, threshold: float = 0.6
+) -> tuple[int, float, list[str]] | None:
+    """Fuzzy-поиск: где find_str "почти" нашёлся.
+
+    Returns:
+        (line_1based, ratio, context_lines) — если ratio >= threshold
+        None — если не нашли или ratio < threshold
+    """
+    if not find_str or not full_text:
+        return None
+    find_lines = find_str.splitlines()
+    if not find_lines:
+        return None
+    text_lines = full_text.splitlines()
+    n = len(find_lines)
+    if len(text_lines) < n:
+        return None
+    sm = difflib.SequenceMatcher()
+    sm.set_seq2(find_str)
+    best_ratio = 0.0
+    best_start = -1
+    for i in range(len(text_lines) - n + 1):
+        window = "\n".join(text_lines[i : i + n])
+        sm.set_seq1(window)
+        if sm.real_quick_ratio() < threshold:
+            continue
+        ratio = sm.ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_start = i
+    if best_ratio < threshold or best_start < 0:
+        return None
+    ctx_n = max(20, 3 * n)
+    lo = max(0, best_start - ctx_n)
+    hi = min(len(text_lines), best_start + n + ctx_n)
+    context = [f"L{j + 1}: {text_lines[j]}" for j in range(lo, hi)]
+    return best_start + 1, best_ratio, context
+
+
 
 def _safe_path(root_folder: str, rel_path: str) -> str | None:
     """Резолвит rel_path внутри root_folder. None — если выход за пределы.
@@ -180,6 +235,7 @@ def apply_llm_changes(
     command_default_timeout: int = 120,
     command_allow_shell_operators: bool = False,
     runner=None,
+    patch_context: dict | None = None,
 ):
     """
     Применяет изменения на основе JSON-ответа от LLM.
@@ -200,6 +256,8 @@ def apply_llm_changes(
         return "❌ JSON должен быть списком объектов (операций)."
 
     success_count = 0
+    _failed_edits: list[FailedEdit] = []
+    _read_requests: list[dict] = []
 
     for action in actions:
         action_type = action.get('action')
@@ -394,6 +452,60 @@ def apply_llm_changes(
             else:
                 changes_log.append("⚠️ План не найден в проекте.")
         # --- EDIT ---
+        # ---------- read_lines (ADR-016) ----------
+        elif action_type == "read_lines":
+            safe = _safe_path(root_folder, rel_path)
+            if safe is None:
+                changes_log.append(
+                    f"❌ read_lines: path outside root — {rel_path}"
+                )
+                continue
+            if not os.path.isfile(safe):
+                changes_log.append(
+                    f"❌ read_lines: файл не найден {rel_path}"
+                )
+                continue
+            try:
+                _start = int(action.get("start", 1))
+                _end = int(action.get("end", _start))
+            except (TypeError, ValueError):
+                changes_log.append(
+                    f"⚠️ read_lines: некорректные start/end для {rel_path}"
+                )
+                continue
+            if _end < _start:
+                _start, _end = _end, _start
+            if _end - _start > 200:
+                _end = _start + 200
+                changes_log.append(
+                    f"   ⚠️ read_lines {rel_path}: диапазон обрезан до 200"
+                )
+            try:
+                with open(safe, encoding="utf-8", errors="replace") as _rf:
+                    _all_lines = _rf.readlines()
+            except OSError as e:
+                changes_log.append(f"❌ read_lines: {rel_path}: {e}")
+                continue
+            _lo = max(1, _start)
+            _hi = min(len(_all_lines), _end)
+            _rw_lines = [
+                f"L{j}: {_all_lines[j - 1].rstrip()}"
+                for j in range(_lo, _hi + 1)
+            ]
+            _read_requests.append(
+                {
+                    "path": rel_path,
+                    "start": _lo,
+                    "end": _hi,
+                    "lines": _rw_lines,
+                }
+            )
+            changes_log.append(
+                f"📖 read_lines {rel_path}: L{_lo}-{_hi} "
+                f"({len(_rw_lines)} строк)"
+            )
+            continue
+
         elif action_type == 'edit':
             safe = _safe_path(root_folder, rel_path)
             if safe is None:
@@ -512,6 +624,31 @@ def apply_llm_changes(
                                     f"({status}) — проверьте отступы. "
                                     f"Find: {preview!r}"
                                 )
+                                if action.get("on_failure") == "retry_with_context":
+                                    _m = _find_near_match(
+                                        full_text, find_str, threshold=0.6
+                                    )
+                                    if _m is not None:
+                                        _ln, _ratio, _ctx = _m
+                                        _failed_edits.append(
+                                            FailedEdit(
+                                                path=rel_path,
+                                                find=find_str,
+                                                replace=replace_str or "",
+                                                error=status,
+                                                best_match_line=_ln,
+                                                best_match_ratio=_ratio,
+                                                context_lines=_ctx,
+                                                total_lines=len(
+                                                    full_text.splitlines()
+                                                ),
+                                            )
+                                        )
+                                        changes_log.append(
+                                            f"   🔧 retry_with_context: "
+                                            f"best_match L{_ln} "
+                                            f"(ratio {_ratio:.2f})"
+                                        )
                     lines = full_text.splitlines(keepends=True)
 
                 if file_changed:
@@ -717,6 +854,14 @@ def apply_llm_changes(
                 aborted = True
                 changes_log.append("⏹ PIPELINE ABORTED")
                 break
+
+    if patch_context is not None:
+        patch_context["failed_edits"] = _failed_edits
+        patch_context["read_requests"] = _read_requests
+        patch_context["needs_retry"] = bool(
+            _failed_edits or _read_requests
+        )
+        patch_context["applied_count"] = success_count
 
     if aborted:
         changes_log.append(
