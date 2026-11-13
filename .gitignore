@@ -1,8 +1,6 @@
-app_config.json
 .venv
 .pig
 *.pyc
-project_context.txt
 check.log
 pig_t3.egg-info/
 
@@ -26,3 +24,8 @@ htmlcov/
 
 # run_command outputs
 .pig/cmd/
+
+# PIG-T3 — user-specific state (не коммитить)
+app_config.json
+project_context.txt
+.pig/

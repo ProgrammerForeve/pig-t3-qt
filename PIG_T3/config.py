@@ -1,9 +1,45 @@
 import json
 import logging
 import os
+import shutil
 import sys
 
 log = logging.getLogger("pig_t3.config")
+
+
+def _user_config_dir() -> str:
+    """Каталог глобальных настроек PIG-T3.
+
+    Linux: $XDG_CONFIG_HOME/pig-t3 или ~/.config/pig-t3
+    macOS: ~/Library/Application Support/PIG-T3
+    Windows: %APPDATA%\\PIG-T3
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "PIG-T3")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/PIG-T3")
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "pig-t3")
+
+
+def _default_root_folder() -> str:
+    """Дефолтная папка проекта для root_folder.
+
+    Не ~/.config — это не проект. Репо (dev) или рядом с exe (frozen).
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def _legacy_config_file() -> str:
+    """Старое место app_config.json — рядом с бинарником или в корне репо."""
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return os.path.join(base, "app_config.json")
 
 
 # Константа расширений
@@ -38,13 +74,11 @@ EXTENSION_TO_MARKDOWN = {
 
 class ConfigManager:
     def __init__(self):
-        if getattr(sys, "frozen", False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        self.config_file = os.path.join(base_dir, "app_config.json")
+        cfg_dir = _user_config_dir()
+        self.config_file = os.path.join(cfg_dir, "app_config.json")
+        self._migrate_legacy()
         self.default_config = {
-            "root_folder": base_dir,
+            "root_folder": _default_root_folder(),
             "extensions": ".py, .yml, .txt, .example",
             "ignore_list": "PIG_T3, .git, .vs, .idea, __pycache__, venv, node_modules, .lock, obj, bin, build, dist, .vscode, log.txt, auto_migration_at_startup.py, project_context.txt, database, WORK_TIME, debug, .pig",
             "output_name": "project_context",
@@ -103,6 +137,26 @@ class ConfigManager:
             "opt_token_bytes_per_token": 4,
         }
 
+    def _migrate_legacy(self) -> None:
+        """Скопировать app_config.json из старого места, если новый ещё нет."""
+        legacy = _legacy_config_file()
+        if legacy == self.config_file:
+            return
+        if not os.path.exists(legacy):
+            return
+        if os.path.exists(self.config_file):
+            return
+        try:
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            shutil.copy2(legacy, self.config_file)
+            log.info(
+                "Migrated app_config.json: %s → %s",
+                legacy,
+                self.config_file,
+            )
+        except OSError as e:
+            log.warning("Config migration failed: %s", e)
+
     def load(self):
         if os.path.exists(self.config_file):
             try:
@@ -114,6 +168,7 @@ class ConfigManager:
 
     def save(self, data):
         try:
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
             json_str = json.dumps(data, indent=4, ensure_ascii=False)
             with open(self.config_file, "w", encoding="utf-8") as f:
                 f.write(json_str)

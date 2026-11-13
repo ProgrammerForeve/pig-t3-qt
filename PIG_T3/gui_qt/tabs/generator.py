@@ -677,6 +677,30 @@ class GeneratorTab(QWidget):
         if saved_expanded:
             self._schedule_expanded_restore(saved_expanded)
         self._update_watcher()
+        self._update_stale_indicator(root, files)
+
+    def _update_stale_indicator(self, root: str, files: list[tuple[str, str]]) -> None:
+        """Обновить status_label: актуален/устарел отчёт.
+
+        None → ничего не делаем (отчёт ещё не генерировался)
+        False → «✅ Отчёт актуален»
+        True → «⚠️ Отчёт устарел»
+        """
+        if not root or not files:
+            return
+        try:
+            from ...core.report_meta import is_stale_from_files
+
+            stale = is_stale_from_files(root, files)
+        except Exception as e:
+            log.debug("stale indicator failed: %s", e)
+            return
+        if stale is True:
+            self.status_label.setText("⚠️ Отчёт устарел — перегенерируйте (изменения в файлах)")
+            self.status_label.setStyleSheet("color: #e5c07b;")
+        elif stale is False:
+            self.status_label.setText("✅ Отчёт актуален")
+            self.status_label.setStyleSheet("")
 
     def _update_watcher(self) -> None:
         """Запустить watcher на текущем root_folder, если auto_refresh on."""

@@ -455,7 +455,9 @@ def test_main_window_close_saves_tree_state(qtbot, tmp_path, monkeypatch):
 
     import json
 
-    saved = json.loads(cfg_path.read_text())
+    project_cfg = tmp_path / ".pig" / "config.json"
+    assert project_cfg.exists()
+    saved = json.loads(project_cfg.read_text(encoding="utf-8"))
     assert "a.py" in saved["ui_tree_unchecked"]
 
 

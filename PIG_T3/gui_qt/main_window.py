@@ -49,6 +49,14 @@ class MainWindow(QMainWindow):
         self.config = config
         self.settings = settings
 
+        _root = self.settings.get("root_folder", "")
+        if _root:
+            from ..core.project_config import merge_into_global
+
+            _merged = merge_into_global(_root, self.settings)
+            self.settings.clear()
+            self.settings.update(_merged)
+
         self._setup_window()
         self._setup_tabs()
         self._setup_statusbar()
@@ -267,7 +275,24 @@ class MainWindow(QMainWindow):
                 generator.commit_recent_projects()
             if hasattr(generator, "capture_tree_state"):
                 self.settings.update(generator.capture_tree_state())
-            save_migrated(self.config, self.settings)
+            # Stage 2: project-ключи → <root>/.pig/config.json,
+            # остальные → ~/.config/pig-t3/app_config.json
+            from ..core.project_config import (
+                PROJECT_KEYS as _PKEYS,
+            )
+            from ..core.project_config import (
+                save_project_config as _save_pc,
+            )
+
+            _root = self.settings.get("root_folder", "")
+            log.debug("closeEvent: root_folder=%r", _root)
+            if _root:
+                _save_pc(_root, self.settings)
+                log.debug("closeEvent: project config saved to %s", _root)
+            else:
+                log.warning("closeEvent: root_folder пустой — project config не сохранён")
+            _global = {k: v for k, v in self.settings.items() if k not in _PKEYS}
+            save_migrated(self.config, _global)
         except Exception as e:
             log.warning(f"Ошибка сохранения настроек при выходе: {e}")
         event.accept()

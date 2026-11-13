@@ -285,6 +285,13 @@ class ProjectAnalyzer:
                     with open(full_path, encoding="utf-8", errors="replace") as f:
                         content = f.read()
                     lines_count = len(content.splitlines())
+                    try:
+                        _st = os.stat(full_path)
+                        _size = _st.st_size
+                        _mtime_ns = _st.st_mtime_ns
+                    except OSError:
+                        _size = 0
+                        _mtime_ns = 0
                     file_metadata.append(
                         {
                             "full_path": full_path,
@@ -292,6 +299,8 @@ class ProjectAnalyzer:
                             "lines": lines_count,
                             "chars": len(content),
                             "ext": ext,
+                            "size": _size,
+                            "mtime_ns": _mtime_ns,
                         }
                     )
                     found_paths.append(rel_path)
@@ -423,5 +432,13 @@ class ProjectAnalyzer:
             except OSError:
                 pass
             return None
+
+        # Stage 3: сохранить fingerprint для stale-детекта
+        try:
+            from .report_meta import save_report_meta
+
+            save_report_meta(root_folder, file_metadata, output_file)
+        except Exception as e:
+            log.warning("save_report_meta failed: %s", e)
 
         return output_file, len(file_metadata), total_lines, total_chars
