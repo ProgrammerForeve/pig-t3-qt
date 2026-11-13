@@ -18,3 +18,7 @@
 | [011](011-rag.md) | RAG для семантического отбора файлов | Принято |
 | [012](012-run-command.md) | run_command — выполнение shell-команд из JSON | Принято |
 | [013](013-lmstudio.md) | LM Studio — OpenAI-совместимый backend | Принято |
+| [014](014-flow-control.md) | Hooks (on_failure/on_success) и flow control в JSON-патче | Принято |
+| [015](015-history-tree.md) | Git-like tree history (undo/redo + branch) | Принято |
+| [016](016-edit-retry-context.md) | Retry упавших `edit` + `read_lines` (multi-turn) | Принято |
+| [017](017-run-command-batch.md) | `run_command` с batch (`commands[]`) + `report_mode` | Принято |
