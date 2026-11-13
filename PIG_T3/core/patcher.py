@@ -1,12 +1,12 @@
-import os
 import json
-import re
-import contextlib
 import logging
+import os
+import re
 
 log = logging.getLogger("pig_t3.patcher")
 
 import shutil
+
 
 def _parse_regex_find(find_str: str) -> tuple[str, int] | None:
     """'/pattern/flags' → (pattern, flags_int). None если не regex-формат.
@@ -96,7 +96,7 @@ def _shift_indent(block: str, from_indent: str, to_indent: str) -> str:
 def _apply_replace_text(
     full_text: str, find_str: str, replace_str: str
 ) -> tuple[str, bool, str]:
-    """Заменить find_str на replace_str с whitespace-flexible поиском
+    r"""Заменить find_str на replace_str с whitespace-flexible поиском
     и адаптацией indent. Возвращает (new_text, changed, status).
 
     Уровень 0: явная регулярка /pattern/flags (opt-in).
@@ -192,9 +192,9 @@ def apply_llm_changes(
         clean_json = clean_json_text(llm_response)
         actions = json.loads(clean_json)
     except json.JSONDecodeError as e:
-        return f"❌ Ошибка парсинга JSON: {str(e)}\nУбедитесь, что LLM вернула корректный JSON список."
+        return f"❌ Ошибка парсинга JSON: {e!s}\nУбедитесь, что LLM вернула корректный JSON список."
     except Exception as e:
-        return f"❌ Критическая ошибка обработки: {str(e)}"
+        return f"❌ Критическая ошибка обработки: {e!s}"
 
     if not isinstance(actions, list):
         return "❌ JSON должен быть списком объектов (операций)."
@@ -310,7 +310,7 @@ def apply_llm_changes(
             state_path = os.path.join(root_folder, ".pig", "state.json")
             if os.path.exists(state_path):
                 try:
-                    with open(state_path, 'r', encoding='utf-8') as f:
+                    with open(state_path, encoding='utf-8') as f:
                         state = json.load(f)
                     if extensions is not None: state['extensions'] = extensions
                     if ignore_list is not None: state['ignore_list'] = ignore_list
@@ -325,7 +325,7 @@ def apply_llm_changes(
                 base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
                 app_config_path = os.path.join(base_dir, "app_config.json")
                 if os.path.exists(app_config_path):
-                    with open(app_config_path, 'r', encoding='utf-8') as f:
+                    with open(app_config_path, encoding='utf-8') as f:
                         app_config = json.load(f)
                     if extensions is not None: app_config['extensions'] = extensions
                     if ignore_list is not None: app_config['ignore_list'] = ignore_list
@@ -350,7 +350,7 @@ def apply_llm_changes(
             plan_path = os.path.join(root_folder, ".pig", "plan.json")
             if os.path.exists(plan_path):
                 try:
-                    with open(plan_path, 'r', encoding='utf-8') as f:
+                    with open(plan_path, encoding='utf-8') as f:
                         plan = json.load(f)
                     found = False
                     for step in plan:
@@ -411,11 +411,11 @@ def apply_llm_changes(
 
             try:
                 try:
-                    with open(abs_path, 'r', encoding='utf-8') as f:
+                    with open(abs_path, encoding='utf-8') as f:
                         lines = f.readlines()
                 except UnicodeDecodeError:
                     # Если файл в UTF-16 (например, вывод PowerShell/Windows), пробуем эту кодировку
-                    with open(abs_path, 'r', encoding='utf-16', errors='replace') as f:
+                    with open(abs_path, encoding='utf-16', errors='replace') as f:
                         lines = f.readlines()
 
                 file_changed = False
@@ -527,14 +527,26 @@ def apply_llm_changes(
 
         # ---------- run_command ----------
         elif action_type == "run_command":
-            command = action.get("command", "")
-            if not command or not isinstance(command, str):
+            # ADR-017: XOR — либо command, либо commands
+            single = action.get("command")
+            batch = action.get("commands")
+            if single and batch:
+                changes_log.append(
+                    "❌ run_command: укажите 'command' или 'commands', не оба"
+                )
+                continue
+            commands = [
+                c
+                for c in (batch or ([single] if single else []))
+                if isinstance(c, str) and c.strip()
+            ]
+            if not commands:
                 changes_log.append("⚠️ run_command: пустая команда")
                 continue
             if not allow_command_execution:
                 changes_log.append(
                     f"⛔ RUN заблокирован (allow_command_execution=false): "
-                    f"{command}"
+                    f"{', '.join(commands)}"
                 )
                 if action.get("on_failure") == "abort":
                     aborted = True
@@ -544,91 +556,167 @@ def apply_llm_changes(
             timeout = action.get("timeout_sec", command_default_timeout)
             output_path = action.get("output_path")
             on_failure = action.get("on_failure", "continue")
+            report_mode = action.get("report_mode") or (
+                "summary" if batch else "full"
+            )
+            _is_single = len(commands) == 1
+            _cmd_output = output_path if _is_single else None
 
-            try:
-                if runner is not None:
-                    result = runner(
-                        command,
-                        cwd=root_folder,
-                        timeout=timeout,
-                        output_path=output_path,
+            _results = []  # list[tuple[str, CommandResult | Exception]]
+            _aborted_here = False
+
+            for _cmd in commands:
+                try:
+                    if runner is not None:
+                        _r = runner(
+                            _cmd,
+                            cwd=root_folder,
+                            timeout=timeout,
+                            output_path=_cmd_output,
+                        )
+                    else:
+                        from .command_runner import (
+                            parse_whitelist,
+                            run_command,
+                        )
+
+                        _r = run_command(
+                            _cmd,
+                            cwd=root_folder,
+                            timeout=timeout,
+                            output_path=_cmd_output,
+                            whitelist=parse_whitelist(command_whitelist),
+                            allow_shell_operators=command_allow_shell_operators,
+                        )
+                except Exception as e:
+                    changes_log.append(f"❌ run_command: {e}")
+                    _results.append((_cmd, e))
+                    if on_failure == "abort":
+                        _aborted_here = True
+                        break
+                    continue
+                _results.append((_cmd, _r))
+                if not _r.ok and on_failure == "abort":
+                    _aborted_here = True
+                    break
+
+            # Combined output_path для batch (single пишет сам через
+            # run_command's _write_output)
+            if output_path and not _is_single:
+                _target_str = _safe_path(root_folder, output_path)
+                if _target_str is None:
+                    changes_log.append(
+                        f"   ⚠️ output_path вне проекта: {output_path}"
                     )
                 else:
-                    from .command_runner import (
-                        parse_whitelist,
-                        run_command,
-                    )
-
-                    result = run_command(
-                        command,
-                        cwd=root_folder,
-                        timeout=timeout,
-                        output_path=output_path,
-                        whitelist=parse_whitelist(command_whitelist),
-                        allow_shell_operators=command_allow_shell_operators,
-                    )
-            except Exception as e:  # noqa: BLE001
-                changes_log.append(f"❌ run_command: {e}")
-                if on_failure == "abort":
-                    aborted = True
-                    changes_log.append("⏹ PIPELINE ABORTED")
-                    break
-                continue
-
-            status = "✅" if result.ok else "❌"
-            changes_log.append(
-                f"{status} RUN: {command} (exit={result.returncode}"
-                f"{', TIMEOUT' if result.timed_out else ''})"
-            )
-            if result.output_path:
-                changes_log.append(f"   📄 output: {result.output_path}")
-
-            # UX: показываем реальный вывод в окне «Результат патча».
-            # - успех: первые 1000 символов stdout (что реально выполнилось)
-            # - ошибка: до 4000 символов stdout+stderr (хвост pytest, import error)
-            # Полный лог всегда в output_path-файле.
-            if result.ok:
-                stdout_preview = (result.stdout or "").strip()
-                if stdout_preview:
-                    if len(stdout_preview) > 2000:
-                        stdout_preview = (
-                            stdout_preview[:2000]
-                            + "\n... (обрезано, полный лог — output_path)"
+                    try:
+                        os.makedirs(
+                            os.path.dirname(_target_str), exist_ok=True
                         )
-                    changes_log.append("   ─── RUN stdout ───")
-                    changes_log.append(stdout_preview)
-                    changes_log.append("   ─────────────────")
-                if result.output_path:
+                        with open(_target_str, "w", encoding="utf-8") as _f:
+                            for _cmd, _r in _results:
+                                _f.write(f"$ {_cmd}\n")
+                                if isinstance(_r, Exception):
+                                    _f.write(f"error: {_r}\n\n")
+                                    continue
+                                _f.write(f"exit_code: {_r.returncode}\n")
+                                if _r.timed_out:
+                                    _f.write("timed_out: yes\n")
+                                _f.write("STDOUT:\n")
+                                _f.write(_r.stdout or "")
+                                if _r.stderr:
+                                    _f.write("\nSTDERR:\n")
+                                    _f.write(_r.stderr)
+                                _f.write("\n" + "=" * 60 + "\n\n")
+                        changes_log.append(
+                            f"   📄 output: {output_path}"
+                        )
+                    except OSError:
+                        changes_log.append(
+                            f"   ⚠️ не удалось записать output: "
+                            f"{output_path}"
+                        )
+
+            # Report
+            if report_mode == "summary":
+                _ok = sum(
+                    1
+                    for _, _r in _results
+                    if not isinstance(_r, Exception) and _r.ok
+                )
+                _total = len(commands)
+                if _ok == _total and not _aborted_here:
                     changes_log.append(
-                        f"   💡 Полный лог: {result.output_path}. "
-                        "В окне результата нажмите «Копировать всё»."
+                        f"✅ RUN {_ok}/{_total}: "
+                        f"{', '.join(commands)} (exit=0)"
                     )
+                else:
+                    _failed = next(
+                        (
+                            c
+                            for c, _r in _results
+                            if isinstance(_r, Exception) or not _r.ok
+                        ),
+                        "?",
+                    )
+                    changes_log.append(
+                        f"❌ RUN {_ok}/{_total}: {_failed} (failed)"
+                    )
+                    try:
+                        from .command_runner import summarize_output
+                    except ImportError:
+                        summarize_output = None  # type: ignore[assignment]
+
+                    for _cmd, _r in _results:
+                        if isinstance(_r, Exception):
+                            changes_log.append(f"─── {_cmd} ───")
+                            changes_log.append(f"error: {_r}")
+                            continue
+                        if not _r.ok:
+                            changes_log.append(
+                                f"─── {_cmd} (exit={_r.returncode}) ───"
+                            )
+                            _raw = (
+                                (_r.stdout or "")
+                                + "\n"
+                                + (_r.stderr or "")
+                            )
+                            _out = (
+                                summarize_output(_raw)
+                                if summarize_output is not None
+                                else _raw[:2000]
+                            )
+                            if _out:
+                                changes_log.append(_out)
             else:
-                parts: list[str] = []
-                if result.stdout:
-                    parts.append(result.stdout.rstrip())
-                if result.stderr:
-                    parts.append("--- STDERR ---")
-                    parts.append(result.stderr.rstrip())
-                combined = "\n".join(parts)
-                if len(combined) > 8000:
-                    combined = (
-                        combined[:8000]
-                        + "\n... (обрезано, полный лог — output_path)"
-                    )
-                if combined:
-                    changes_log.append("   ─── RUN output ───")
-                    changes_log.append(combined)
-                    changes_log.append("   ─────────────────")
-                if result.output_path:
+                for _cmd, _r in _results:
+                    if isinstance(_r, Exception):
+                        changes_log.append(f"❌ RUN: {_cmd}: {_r}")
+                        continue
+                    _st = "✅" if _r.ok else "❌"
                     changes_log.append(
-                        f"   💡 Полный лог: {result.output_path}. "
-                        "В окне результата нажмите «Копировать всё»."
+                        f"{_st} RUN: {_cmd} (exit={_r.returncode}"
+                        f"{', TIMEOUT' if _r.timed_out else ''})"
                     )
-                if on_failure == "abort":
-                    aborted = True
-                    changes_log.append("⏹ PIPELINE ABORTED")
-                    break
+                    _out = (
+                        (_r.stdout or "")
+                        + ("\n" + _r.stderr if _r.stderr else "")
+                    ).strip()
+                    if _out:
+                        _limit = 2000 if _r.ok else 8000
+                        if len(_out) > _limit:
+                            _out = (
+                                _out[:_limit]
+                                + "\n... (обрезано, полный лог — output_path)"
+                            )
+                        changes_log.append("   ─── RUN output ───")
+                        changes_log.append(_out)
+                        changes_log.append("   ─────────────────")
+
+            if _aborted_here:
+                aborted = True
+                changes_log.append("⏹ PIPELINE ABORTED")
+                break
 
     if aborted:
         changes_log.append(

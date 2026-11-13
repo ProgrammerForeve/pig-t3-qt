@@ -101,6 +101,8 @@ class ConfigManager:
             "command_default_timeout": 120,
             "command_whitelist": "",
             "command_allow_shell_operators": False,
+            "command_summary_max_lines": 100,
+            "command_summary_min_matches": 5,
             "custom_system_prompt": "",
             "lmstudio_base_url": "http://localhost:1234/v1",
             "lmstudio_api_key": "lm-studio",

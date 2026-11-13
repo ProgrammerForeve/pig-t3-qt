@@ -202,7 +202,7 @@ def run_command(
             timed_out=True,
             truncated=t1 or t2,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return CommandResult(
             command=command,
             returncode=-1,
@@ -241,3 +241,29 @@ def run_command(
                     result.output_path = written
 
     return result
+
+
+_FAIL_PATTERNS = re.compile(
+    r"^(FAILED|ERROR|error:|E\\s{2,}|File \"|assert|Traceback)",
+    re.MULTILINE,
+)
+
+
+def summarize_output(
+    text: str, max_lines: int = 100, min_matches: int = 5
+) -> str:
+    """Отфильтровать вывод для failure summary.
+
+    1. Матчит строки по типичным failure-паттернам (pytest/ruff/mypy/
+       pylint/bandit/traceback)
+    2. Если matches < min_matches — fallback на последние 20 строк
+       (нестандартный вывод, exit code tail)
+    3. Truncate до max_lines (защита от гигантских стеков)
+    """
+    if not text or not text.strip():
+        return ""
+    lines = text.splitlines()
+    matches = [ln for ln in lines if _FAIL_PATTERNS.match(ln)]
+    if len(matches) < min_matches:
+        matches = lines[-20:]
+    return "\n".join(matches[:max_lines])

@@ -1,8 +1,8 @@
 import json
 import logging
 import os
-import sys
 from datetime import datetime
+
 from ..config import EXTENSION_TO_MARKDOWN
 
 log = logging.getLogger("pig_t3.core.analyzer")
@@ -144,6 +144,11 @@ class ProjectAnalyzer:
             "- Do NOT use for destructive operations (rm -rf, git reset --hard, git push --force, DROP TABLE, format) unless the user explicitly asked in the task description.",
             "- For file changes use 'create' / 'edit' / 'move' / 'delete'. run_command is NOT a substitute.",
             "- Split long scripts into multiple run_command actions; each should be short.",
+            "   - 'commands' (array, optional, XOR with 'command'): run multiple commands, summary by default. Use this to validate after all edits applied.",
+            "   - 'report_mode' (string, optional): 'summary' or 'full'. Default: 'summary' for batch, 'full' for single command.",
+            "   BATCH example (validate after edits, no need to read full stdout):",
+            "   {\"action\": \"run_command\", \"commands\": [\"pytest tests/ -q\", \"ruff check PIG_T3/\"],",
+            "    \"report_mode\": \"summary\", \"on_failure\": \"abort\", \"output_path\": \".pig/cmd/verify.log\"}",
             "- If a command's failure should stop the plan, set \"on_failure\": \"abort\".",
             "",
         ]
