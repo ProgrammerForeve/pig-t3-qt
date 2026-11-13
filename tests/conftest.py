@@ -67,6 +67,41 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 @pytest.fixture(autouse=True)
+def _reap_qt_threads():
+    """Quit+wait живых QThread после теста (offscreen CI).
+
+    CI Linux offscreen exit 139 SIGSEGV: тест создаёт QThread (реальный
+    worker из worker_test_files exclusion), teardown C++ объекта, worker
+    emit'ит done после destruction → heap corruption. Flaky: тот же
+    коммит master ✅, tag v2.3.1 ❌.
+
+    Только в offscreen — локально (DISPLAY) no-op, не замедляет.
+    """
+    yield
+    import os as _os
+
+    if _os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        return
+    try:
+        from PySide6.QtCore import QThread
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.processEvents()
+        for child in app.children():
+            if isinstance(child, QThread) and child.isRunning():
+                child.quit()
+                child.wait(2000)
+        import gc
+
+        gc.collect()
+    except Exception:  # noqa: S110 — teardown helper, swallow безопасен
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _silence_dialogs(monkeypatch):
     """Не даём модальным диалогам блокировать прогон тестов.
 
@@ -112,7 +147,12 @@ def _no_async_workers(monkeypatch, request):
     worker_test_files = (
         "test_ollama_models_worker",
         "test_lmstudio_models_worker",
-        "test_optimize_dialog_async",
+        # test_optimize_dialog_async убран: тесты не проверяют реальные
+        # воркеры, но с реальным LMStudioModelsWorker на CI offscreen
+        # race → exit 139 (worker emit done после dialog teardown).
+        # Оба _fetch_*_async мокаются ниже.
+        # test_auto_fetch_runs_when_cache_stale сам monkeypatch'ит
+        # _fetch_models_async — работает без exclusion.
         "test_optimize_dialog_rag",
     )
     if not any(t in nodeid for t in worker_test_files):

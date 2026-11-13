@@ -75,7 +75,7 @@ jobs:
 
       - name: Run tests (Linux, before build)
         if: runner.os == 'Linux'
-        run: uv run pytest tests/ -q --timeout=60 --timeout-method=thread
+        run: uv run pytest tests/ -v --tb=short --maxfail=1 --timeout=60 --timeout-method=thread
 
       - name: Build executable
         run: uv run pyinstaller pig_t3.spec --noconfirm
