@@ -173,3 +173,85 @@ def test_tab_broken_json_does_not_crash(qtbot, tmp_path):
     qtbot.addWidget(tab)
     # load failed → пустое состояние, без исключения
     assert tab.status_label.text() != ""
+
+
+# ---------- Button handlers ----------
+
+
+def _make_tree_with_backup(tmp_path, n=2):
+    _make_tree(tmp_path, n=n)
+    for i in range(n):
+        nid = f"node-{i}"
+        backup = tmp_path / ".pig" / "backups" / nid
+        (backup / "before").mkdir(parents=True)
+        (backup / "after").mkdir(parents=True)
+        (backup / "before" / "a.py").write_text(f"before-{i}\n")
+        (backup / "after" / "a.py").write_text(f"after-{i}\n")
+
+
+def test_rollback_button_enabled_and_undoes(qtbot, tmp_path):
+    _make_tree_with_backup(tmp_path, n=2)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    assert tab.btn_rollback.isEnabled()
+    tab.btn_rollback.click()
+    assert tab._manager.current == "node-0"
+
+
+def test_redo_button_after_rollback(qtbot, tmp_path):
+    _make_tree_with_backup(tmp_path, n=2)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.btn_rollback.click()
+    assert tab.btn_redo.isEnabled()
+    tab.btn_redo.click()
+    assert tab._manager.current == "node-1"
+
+
+def test_branch_button_sets_current(qtbot, tmp_path):
+    _make_tree(tmp_path, n=2)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    from PySide6.QtCore import QModelIndex
+
+    root_idx = tab.model.index(0, 0, QModelIndex())
+    tab.tree_view.setCurrentIndex(root_idx)
+    assert tab.btn_branch.isEnabled()
+    tab.btn_branch.click()
+    assert tab._manager.current == "node-0"
+
+
+def test_delete_button_with_confirm(qtbot, tmp_path, monkeypatch):
+    _make_tree(tmp_path, n=1)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    from PySide6.QtCore import QModelIndex
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Yes),
+    )
+    root_idx = tab.model.index(0, 0, QModelIndex())
+    tab.tree_view.setCurrentIndex(root_idx)
+    tab.btn_delete.click()
+    assert len(tab._manager.nodes) == 0
+
+
+def test_delete_button_rejected(qtbot, tmp_path, monkeypatch):
+    _make_tree(tmp_path, n=1)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    from PySide6.QtCore import QModelIndex
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **kw: QMessageBox.StandardButton.No),
+    )
+    root_idx = tab.model.index(0, 0, QModelIndex())
+    tab.tree_view.setCurrentIndex(root_idx)
+    tab.btn_delete.click()
+    assert len(tab._manager.nodes) == 1

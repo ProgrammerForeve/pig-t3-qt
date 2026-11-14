@@ -79,3 +79,72 @@ def test_history_node_defaults():
     assert node.children == []
     assert node.source == "editor"
     assert node.status == "applied"
+    assert node.payload == {}
+
+
+# ---------- payload / max_nodes / delete_node ----------
+
+
+def test_apply_with_payload_roundtrip(tmp_path):
+    mgr = HistoryTreeManager(str(tmp_path))
+    nid = mgr.apply(
+        "patch",
+        ["a.py"],
+        payload={"llm_text": "[json]", "paths": ["a.py"]},
+    )
+    assert mgr.nodes[nid].payload["llm_text"] == "[json]"
+    mgr2 = HistoryTreeManager(str(tmp_path))
+    assert mgr2.nodes[nid].payload["llm_text"] == "[json]"
+
+
+def test_max_nodes_prunes_rolled_back(tmp_path):
+    mgr = HistoryTreeManager(str(tmp_path), max_nodes=3)
+    mgr.apply("1", [])
+    mgr.apply("2", [])
+    mgr.apply("3", [])
+    mgr.undo()
+    mgr.apply("4", [])
+    mgr.apply("5", [])
+    assert len(mgr.nodes) <= 3
+
+
+def test_max_nodes_keeps_path_to_current(tmp_path):
+    mgr = HistoryTreeManager(str(tmp_path), max_nodes=2)
+    a = mgr.apply("a", [])
+    b = mgr.apply("b", [])
+    c = mgr.apply("c", [])
+    mgr.apply("d", [])
+    assert mgr.current in mgr.nodes
+    assert a in mgr.nodes or b in mgr.nodes or c in mgr.nodes
+
+
+def test_delete_node_leaf(tmp_path):
+    mgr = HistoryTreeManager(str(tmp_path))
+    n1 = mgr.apply("1", [])
+    n2 = mgr.apply("2", [])
+    removed = mgr.delete_node(n2)
+    assert removed == 1
+    assert n2 not in mgr.nodes
+    assert n1 in mgr.nodes
+
+
+def test_delete_node_with_children_requires_cascade(tmp_path):
+    import pytest
+
+    mgr = HistoryTreeManager(str(tmp_path))
+    mgr.apply("1", [])
+    n2 = mgr.apply("2", [])
+    with pytest.raises(ValueError, match="cascade"):
+        mgr.delete_node(n2)
+
+
+def test_delete_node_cascade(tmp_path):
+    mgr = HistoryTreeManager(str(tmp_path))
+    n1 = mgr.apply("1", [])
+    n2 = mgr.apply("2", [])
+    n3 = mgr.apply("3", [])
+    removed = mgr.delete_node(n1, cascade=True)
+    assert removed == 3
+    assert n2 not in mgr.nodes
+    assert n3 not in mgr.nodes
+    assert mgr.current is None

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...core.history_tree import HistoryTreeManager
 from ...core.patcher import clean_json_text
 from ..dialogs.diff_dialog import DiffDialog
 from ..workers.apply_worker import ApplyWorker, UndoRedoWorker
@@ -99,6 +100,7 @@ class EditorTab(QWidget):
         self.redo_stack: list[dict] = []
         self._last_applied_content: str | None = None
         self._last_patch_record: dict | None = None
+        self._history_mgr: HistoryTreeManager | None = None
         self._current_path: str = self.settings.get("root_folder", "")
 
         self._apply_thread: QThread | None = None
@@ -310,6 +312,7 @@ class EditorTab(QWidget):
     def set_path(self, folder: str) -> None:
         self._current_path = folder or ""
         self.path_edit.setText(self._current_path)
+        self._history_mgr = None
         self._load_history()
 
     def load_json(self, text: str) -> None:
@@ -415,7 +418,22 @@ class EditorTab(QWidget):
             sig.connect(self._cleanup_apply_thread)
         self._apply_thread.start()
 
-    def _on_apply_done(self, log: str, record: dict) -> None:
+    def _on_apply_done(self, apply_log: str, record: dict) -> None:
+        mgr = self._ensure_history_manager()
+        if mgr is not None:
+            try:
+                mgr.apply(
+                    action_summary=(f"patch ({len(record.get('paths', []))} files)"),
+                    files=list(record.get("paths", [])),
+                    source="editor",
+                    backup_id=record["id"],
+                    payload={
+                        "llm_text": record.get("llm_text", ""),
+                        "paths": list(record.get("paths", [])),
+                    },
+                )
+            except Exception as e:
+                self.status_label.setText(f"⚠️ История: {e}")
         self.history_stack.append(record)
         if len(self.history_stack) > _HISTORY_LIMIT:
             oldest = self.history_stack.pop(0)
@@ -435,7 +453,7 @@ class EditorTab(QWidget):
         self.redo_stack.clear()
         self._update_undo_redo()
         self._last_patch_record = record
-        self._show_result_dialog(log)
+        self._show_result_dialog(apply_log)
 
     def _on_apply_error(self, msg: str) -> None:
         _show_error(self, "Ошибка применения", msg)
@@ -648,6 +666,20 @@ class EditorTab(QWidget):
     def _history_file(self) -> str:
         return os.path.join(self._current_path, ".pig", "editor_history.json")
 
+    def _ensure_history_manager(self) -> HistoryTreeManager | None:
+        if not self._current_path or not os.path.isdir(self._current_path):
+            return None
+        if self._history_mgr is None:
+            try:
+                self._history_mgr = HistoryTreeManager(
+                    self._current_path,
+                    max_nodes=_HISTORY_LIMIT,
+                )
+            except Exception as e:
+                log.warning("history manager init failed: %s", e)
+                return None
+        return self._history_mgr
+
     def _save_history(self) -> None:
         if not self._current_path or not os.path.isdir(self._current_path):
             return
@@ -669,6 +701,7 @@ class EditorTab(QWidget):
             pass
 
     def _load_history(self) -> None:
+        self._history_mgr = None
         self.history_stack = []
         self.redo_stack = []
         if not self._current_path or not os.path.isdir(self._current_path):

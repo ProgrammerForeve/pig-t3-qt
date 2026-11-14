@@ -1,11 +1,14 @@
-"""HistoryTab — просмотр git-like дерева истории (ADR-015, view only).
+"""HistoryTab — просмотр git-like дерева истории (ADR-015).
 
 Источник данных — HistoryTreeManager (.pig/history_tree.json).
 Слева QTreeView с HistoryTreeModel, справа QTextBrowser с unified diff
 before/after из .pig/backups/<node.id>/.
 
-Кнопки Rollback / Branch / Redo / Delete — disabled заглушки до
-миграции EditorTab на HistoryTreeManager (ADR-015 P0 step 4).
+Кнопки:
+- Rollback: undo() + restore before/ (1 шаг от current)
+- Redo: redo() + restore after/ (1 шаг вперёд)
+- Branch: branch_from(selected) — следующий apply пойдёт от выбранной
+- Delete: delete_node(selected, cascade=True)
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QTextBrowser,
@@ -34,9 +38,6 @@ from ..models.history_tree_model import HistoryTreeModel
 log = logging.getLogger("pig_t3.gui_qt.tabs.history")
 
 
-_STUB_TOOLTIP = "Требуется миграция EditorTab на HistoryTreeManager (ADR-015 P0 step 4)"
-
-
 def _read_text(path: str) -> str:
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -46,7 +47,7 @@ def _read_text(path: str) -> str:
 
 
 class HistoryTab(QWidget):
-    """Просмотр дерева истории (read-only на этом этапе)."""
+    """Дерево истории + rollback/redo/branch/delete."""
 
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
@@ -73,18 +74,26 @@ class HistoryTab(QWidget):
 
         toolbar = QHBoxLayout()
         self.btn_refresh = QPushButton("🔄 Обновить")
-        self.btn_rollback = QPushButton("↩ Rollback to here")
-        self.btn_branch = QPushButton("🌿 Branch from here")
-        self.btn_redo = QPushButton("↪ Redo")
-        self.btn_delete = QPushButton("🗑 Delete node")
-        for btn in (self.btn_rollback, self.btn_branch, self.btn_redo, self.btn_delete):
+        self.btn_rollback = QPushButton("↩ Отменить")
+        self.btn_rollback.setToolTip("Откатить последний шаг (restore before/)")
+        self.btn_redo = QPushButton("↪ Повторить")
+        self.btn_redo.setToolTip("Повторить откат (restore after/)")
+        self.btn_branch = QPushButton("🌿 Ветвить")
+        self.btn_branch.setToolTip("Сделать выбранную ноду current; следующий apply пойдёт от неё")
+        self.btn_delete = QPushButton("🗑 Удалить")
+        self.btn_delete.setToolTip("Удалить выбранную ноду и её детей")
+        for btn in (
+            self.btn_rollback,
+            self.btn_redo,
+            self.btn_branch,
+            self.btn_delete,
+        ):
             btn.setEnabled(False)
-            btn.setToolTip(_STUB_TOOLTIP)
         self.status_label = QLabel("Выберите папку проекта во вкладке Генератор")
         toolbar.addWidget(self.btn_refresh)
         toolbar.addWidget(self.btn_rollback)
-        toolbar.addWidget(self.btn_branch)
         toolbar.addWidget(self.btn_redo)
+        toolbar.addWidget(self.btn_branch)
         toolbar.addWidget(self.btn_delete)
         toolbar.addStretch(1)
         toolbar.addWidget(self.status_label, 1)
@@ -111,6 +120,10 @@ class HistoryTab(QWidget):
 
     def _connect_signals(self) -> None:
         self.btn_refresh.clicked.connect(self.reload)
+        self.btn_rollback.clicked.connect(self._on_rollback_clicked)
+        self.btn_redo.clicked.connect(self._on_redo_clicked)
+        self.btn_branch.clicked.connect(self._on_branch_clicked)
+        self.btn_delete.clicked.connect(self._on_delete_clicked)
         self.tree_view.selectionModel().currentRowChanged.connect(self._on_selection_changed)
 
     # ---------- Public ----------
@@ -126,6 +139,7 @@ class HistoryTab(QWidget):
             self.model.set_manager(None)
             self.details.setHtml("")
             self.status_label.setText("Выберите папку проекта во вкладке Генератор")
+            self._update_button_states()
             return
         try:
             self._manager = HistoryTreeManager(self._current_path)
@@ -135,6 +149,7 @@ class HistoryTab(QWidget):
             self.model.set_manager(None)
             self.details.setHtml("")
             self.status_label.setText(f"⚠️ Ошибка загрузки: {e}")
+            self._update_button_states()
             return
         self.model.set_manager(self._manager)
         if not self._manager.nodes:
@@ -142,6 +157,7 @@ class HistoryTab(QWidget):
                 "<p><i>История пуста. Примените патч через вкладку «Редактор» — запись появится здесь.</i></p>"
             )
             self.status_label.setText("История пуста (примените патч через Редактор)")
+            self._update_button_states()
             return
         self.status_label.setText(f"Нод: {len(self._manager.nodes)} · current: {self._manager.current or '—'}")
         current_idx = self.model.find_index(self._manager.current or "")
@@ -149,10 +165,115 @@ class HistoryTab(QWidget):
             self.tree_view.setCurrentIndex(current_idx)
             self.tree_view.scrollTo(current_idx)
             self.tree_view.expand(current_idx.parent())
+        self._update_button_states()
+
+    # ---------- Button states ----------
+
+    def _update_button_states(self) -> None:
+        mgr = self._manager
+        if mgr is None:
+            for btn in (
+                self.btn_rollback,
+                self.btn_redo,
+                self.btn_branch,
+                self.btn_delete,
+            ):
+                btn.setEnabled(False)
+            return
+        cur = mgr.nodes.get(mgr.current) if mgr.current else None
+        has_parent = cur is not None and cur.parent is not None
+        has_redo = False
+        if cur is not None:
+            has_redo = any(c in mgr.nodes and mgr.nodes[c].status == "rolled_back" for c in cur.children)
+        has_selection = self.tree_view.currentIndex().isValid()
+        self.btn_rollback.setEnabled(has_parent)
+        self.btn_redo.setEnabled(has_redo)
+        self.btn_branch.setEnabled(has_selection)
+        self.btn_delete.setEnabled(has_selection)
 
     # ---------- Handlers ----------
 
+    def _on_rollback_clicked(self) -> None:
+        mgr = self._manager
+        if mgr is None or not mgr.current:
+            return
+        node = mgr.nodes.get(mgr.current)
+        if node is None or node.parent is None:
+            return
+        record = {"id": node.id, "paths": list(node.files)}
+        mgr.undo()
+        self._restore_backup(record, "before")
+        self.reload()
+
+    def _on_redo_clicked(self) -> None:
+        mgr = self._manager
+        if mgr is None or not mgr.current:
+            return
+        cur = mgr.nodes.get(mgr.current)
+        if cur is None:
+            return
+        candidates = [mgr.nodes[c] for c in cur.children if c in mgr.nodes and mgr.nodes[c].status == "rolled_back"]
+        if not candidates:
+            return
+        candidates.sort(key=lambda n: n.applied_at)
+        target = candidates[-1]
+        record = {"id": target.id, "paths": list(target.files)}
+        mgr.redo()
+        self._restore_backup(record, "after")
+        self.reload()
+
+    def _on_branch_clicked(self) -> None:
+        mgr = self._manager
+        if mgr is None:
+            return
+        nid = self.model.node_id_at(self.tree_view.currentIndex())
+        if not nid:
+            return
+        mgr.branch_from(nid)
+        self.reload()
+
+    def _on_delete_clicked(self) -> None:
+        mgr = self._manager
+        if mgr is None:
+            return
+        nid = self.model.node_id_at(self.tree_view.currentIndex())
+        if not nid:
+            return
+        ok = QMessageBox.question(
+            self,
+            "Удалить",
+            f"Удалить ноду {nid[:8]}…? (дети тоже будут удалены)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ok != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            mgr.delete_node(nid, cascade=True)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", str(e))
+            return
+        self.reload()
+
+    def _restore_backup(self, record: dict, which: str) -> None:
+        if not self._current_path:
+            return
+        from ..workers.apply_worker import _restore_snapshot
+
+        backup_dir = os.path.join(
+            self._current_path,
+            ".pig",
+            "backups",
+            record["id"],
+            which,
+        )
+        try:
+            _restore_snapshot(self._current_path, backup_dir, record.get("paths", []))
+        except Exception as e:
+            log.warning("restore backup failed: %s", e)
+
     def _on_selection_changed(self, current, _previous) -> None:
+        self._update_button_states()
         node = self.model.data(current, Qt.ItemDataRole.UserRole)
         if node is None:
             self.details.setHtml("")
