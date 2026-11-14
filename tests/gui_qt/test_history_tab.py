@@ -300,6 +300,62 @@ def test_badge_hidden_under_threshold(qtbot, tmp_path):
     assert tab.badge.text() == ""
 
 
+# ---------- Source filter (ADR-015 P1) ----------
+
+
+def _make_mixed_tree(tmp_path):
+    from PIG_T3.core.history_tree import HistoryTreeManager
+
+    (tmp_path / ".pig").mkdir()
+    mgr = HistoryTreeManager(str(tmp_path))
+    n1 = mgr.apply("editor1", [], source="editor")
+    n2 = mgr.apply("plan1", [], source="plan")
+    n3 = mgr.apply("editor2", [], source="editor")
+    return n1, n2, n3
+
+
+def test_filter_both_checked_shows_all(qtbot, tmp_path):
+    n1, n2, n3 = _make_mixed_tree(tmp_path)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    visible = tab.model._visible_ids
+    assert {n1, n2, n3} <= visible
+
+
+def test_filter_editor_only_hides_pure_plan_leaf(qtbot, tmp_path):
+    n1, n2, n3 = _make_mixed_tree(tmp_path)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.cb_source_plan.setChecked(False)
+    visible = tab.model._visible_ids
+    # editor1 (n1) matches, plan1 (n2) — мост к editor2, editor2 (n3) matches
+    assert n1 in visible
+    assert n2 in visible
+    assert n3 in visible
+
+
+def test_filter_plan_only_hides_editor_leaf(qtbot, tmp_path):
+    n1, n2, n3 = _make_mixed_tree(tmp_path)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.cb_source_editor.setChecked(False)
+    visible = tab.model._visible_ids
+    # plan1 (n2) matches, editor1 (n1) — предок (мост), editor2 (n3) — не matches
+    assert n2 in visible
+    assert n1 in visible
+    assert n3 not in visible
+
+
+def test_filter_both_unchecked_shows_all(qtbot, tmp_path):
+    n1, n2, n3 = _make_mixed_tree(tmp_path)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.cb_source_editor.setChecked(False)
+    tab.cb_source_plan.setChecked(False)
+    visible = tab.model._visible_ids
+    assert {n1, n2, n3} <= visible
+
+
 def test_delete_button_rejected(qtbot, tmp_path, monkeypatch):
     _make_tree(tmp_path, n=1)
     tab = HistoryTab({"root_folder": str(tmp_path)})

@@ -20,6 +20,7 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -88,6 +89,12 @@ class HistoryTab(QWidget):
         self.btn_prune.setToolTip("Удалить все rolled_back ноды вне пути к current")
         self.badge = QLabel("")
         self.badge.setStyleSheet("color: #e5c07b; font-weight: bold;")
+        self.cb_source_editor = QCheckBox("✏️ Editor")
+        self.cb_source_editor.setChecked(True)
+        self.cb_source_editor.setToolTip("Показать editor-патчи (вкладка Редактор)")
+        self.cb_source_plan = QCheckBox("📝 Plan")
+        self.cb_source_plan.setChecked(True)
+        self.cb_source_plan.setToolTip("Показать plan-патчи (вкладка План)")
         for btn in (
             self.btn_rollback,
             self.btn_redo,
@@ -103,6 +110,9 @@ class HistoryTab(QWidget):
         toolbar.addWidget(self.btn_branch)
         toolbar.addWidget(self.btn_delete)
         toolbar.addWidget(self.btn_prune)
+        toolbar.addSpacing(12)
+        toolbar.addWidget(self.cb_source_editor)
+        toolbar.addWidget(self.cb_source_plan)
         toolbar.addStretch(1)
         toolbar.addWidget(self.badge)
         toolbar.addWidget(self.status_label, 1)
@@ -134,6 +144,8 @@ class HistoryTab(QWidget):
         self.btn_branch.clicked.connect(self._on_branch_clicked)
         self.btn_delete.clicked.connect(self._on_delete_clicked)
         self.btn_prune.clicked.connect(self._on_prune_clicked)
+        self.cb_source_editor.toggled.connect(self._apply_source_filter)
+        self.cb_source_plan.toggled.connect(self._apply_source_filter)
         self.tree_view.selectionModel().currentRowChanged.connect(self._on_selection_changed)
 
     # ---------- Public ----------
@@ -270,6 +282,15 @@ class HistoryTab(QWidget):
             QMessageBox.warning(self, "Ошибка", str(e))
             return
         self.reload()
+
+    def _apply_source_filter(self) -> None:
+        sources: set[str] = set()
+        if self.cb_source_editor.isChecked():
+            sources.add("editor")
+        if self.cb_source_plan.isChecked():
+            sources.add("plan")
+        self.model.set_source_filter(sources)
+        self._update_button_states()
 
     def _on_prune_clicked(self) -> None:
         mgr = self._manager

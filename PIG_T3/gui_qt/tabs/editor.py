@@ -549,6 +549,18 @@ class EditorTab(QWidget):
         btn_save.clicked.connect(_save_to_file)
         btn_row.addWidget(btn_save)
 
+        read_requests = record.get("_patch_ctx", {}).get("read_requests", []) if record else []
+        if read_requests:
+            btn_show_ctx = QPushButton(f"📖 Показать контекст ({len(read_requests)})")
+            btn_show_ctx.setToolTip("Строки, которые LLM запросила через read_lines")
+            btn_show_ctx.clicked.connect(lambda: self._show_read_context_dialog(read_requests))
+            btn_row.addWidget(btn_show_ctx)
+
+            btn_copy_ctx = QPushButton("📋 Копировать с контекстом")
+            btn_copy_ctx.setToolTip("Скопировать патч + все запрошенные строки (для вставки в чат)")
+            btn_copy_ctx.clicked.connect(lambda: self._copy_with_read_context(record, read_requests))
+            btn_row.addWidget(btn_copy_ctx)
+
         if record and record.get("_patch_ctx", {}).get("needs_retry"):
             btn_retry = QPushButton("🔧 Retry с контекстом")
             btn_retry.setToolTip("Повторить упавшие edits через LLM с подсказкой контекста (ADR-016)")
@@ -564,6 +576,48 @@ class EditorTab(QWidget):
 
         dlg.exec()
         dlg.deleteLater()
+
+    def _show_read_context_dialog(self, read_requests: list[dict]) -> None:
+        from PySide6.QtWidgets import (
+            QDialog,
+            QPlainTextEdit,
+            QPushButton,
+            QVBoxLayout,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Запрошенный контекст")
+        dlg.resize(1000, 700)
+        layout = QVBoxLayout(dlg)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        parts: list[str] = []
+        for rr in read_requests:
+            parts.append(f"=== {rr.get('path', '?')} L{rr.get('start', 0)}-{rr.get('end', 0)} ===")
+            parts.extend(rr.get("lines", []))
+            parts.append("")
+        text.setPlainText("\n".join(parts))
+        layout.addWidget(text, 1)
+        btn_close = QPushButton("Закрыть")
+        btn_close.clicked.connect(dlg.accept)
+        layout.addWidget(btn_close)
+        dlg.exec()
+        dlg.deleteLater()
+
+    def _copy_with_read_context(self, record: dict | None, read_requests: list[dict]) -> None:
+        from ...utils.clipboard_text import copy_text_to_clipboard
+
+        parts: list[str] = []
+        if record:
+            parts.append(record.get("llm_text", ""))
+        for rr in read_requests:
+            parts.append(f"\n\n=== {rr.get('path', '?')} L{rr.get('start', 0)}-{rr.get('end', 0)} ===")
+            parts.extend(rr.get("lines", []))
+        ok = copy_text_to_clipboard("\n".join(parts))
+        if ok:
+            self.status_label.setText(f"📋 Патч + {len(read_requests)} фрагм. в буфере")
+        else:
+            self.status_label.setText("⚠️ Не удалось скопировать")
 
     def _on_retry_with_context(self, record: dict) -> None:
         ctx = record.get("_patch_ctx", {})

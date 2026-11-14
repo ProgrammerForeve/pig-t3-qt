@@ -99,6 +99,38 @@ def test_retry_on_invalid_json(qtbot, managed_thread):
     assert len(llm.calls) == 2
 
 
+def test_full_retry_second_round(qtbot, managed_thread):
+    """Round 0 bad → 🔧 retry 1/2 → Round 1 bad → 🔄 full retry
+    2/2 → Round 2 good."""
+
+    class _SeqLLM:
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.calls: list[str] = []
+
+        def ask(self, prompt):
+            self.calls.append(prompt)
+            return self.responses.pop(0) if self.responses else "[]"
+
+    llm = _SeqLLM(
+        [
+            "bad",
+            "still bad",
+            '[{"action": "mark_step_completed", "step_id": "s1"}]',
+        ]
+    )
+    w = _make_worker(llm, max_retries=2)
+    t = managed_thread()
+    w.moveToThread(t)
+    progress: list[tuple[int, str]] = []
+    w.progress.connect(lambda p, m: progress.append((p, m)))
+    run_worker_and_wait(qtbot, w, t, done_signal=w.done)
+    assert len(llm.calls) == 3
+    msgs = [m for _, m in progress]
+    assert any("🔧 retry 1/2" in m for m in msgs)
+    assert any("🔄 full retry 2/2" in m for m in msgs)
+
+
 def test_retry_exhausted_emits_error(qtbot, managed_thread):
     llm = _FakeLLM(["not json"])
     w = _make_worker(llm, max_retries=1)

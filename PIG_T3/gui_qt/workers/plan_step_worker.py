@@ -287,6 +287,32 @@ class PlanStepWorker(QObject):
         max_rounds = max(0, int(self._max_retries))
         full_log: list[str] = []
         last_error = ""
+        original_prompt = prompt
+
+        def _next_prompt(
+            round_idx: int,
+            failed: list,
+            reads: list,
+            last_response: str,
+        ) -> str | None:
+            """Промпт для следующего round или None.
+
+            round_idx=0 → 🔧 retry_with_context (или тот же prompt
+            при invalid json), round_idx>=1 → 🔄 full retry.
+            """
+            if round_idx == 0:
+                self.progress.emit(70, f"🔧 retry {round_idx + 1}/{max_rounds}")
+                if failed or reads:
+                    from ...core.multi_turn import build_retry_prompt
+
+                    return build_retry_prompt(
+                        failed_edits=failed,
+                        read_requests=reads,
+                        original_response=last_response,
+                    )
+                return original_prompt
+            self.progress.emit(70, f"🔄 full retry {round_idx + 1}/{max_rounds}")
+            return self._full_retry_prompt()
 
         for round_idx in range(max_rounds + 1):
             if self._is_interrupted():
@@ -301,7 +327,10 @@ class PlanStepWorker(QObject):
                     if not self._sleep_cancellable(1.0):
                         self.cancelled.emit()
                         return
-                    llm_response = llm.ask(prompt) or ""
+                    next_p = _next_prompt(round_idx, [], [], llm_response)
+                    if not next_p:
+                        break
+                    llm_response = llm.ask(next_p) or ""
                     if not llm_response:
                         break
                     continue
@@ -351,15 +380,10 @@ class PlanStepWorker(QObject):
             if round_idx >= max_rounds:
                 break
 
-            self.progress.emit(70, f"Retry {round_idx + 1}/{max_rounds}")
-            from ...core.multi_turn import build_retry_prompt
-
-            retry_prompt = build_retry_prompt(
-                failed_edits=failed,
-                read_requests=reads,
-                original_response=llm_response,
-            )
-            llm_response = llm.ask(retry_prompt) or ""
+            next_p = _next_prompt(round_idx, failed, reads, llm_response)
+            if not next_p:
+                break
+            llm_response = llm.ask(next_p) or ""
             if self._is_interrupted():
                 self.cancelled.emit()
                 return
@@ -372,6 +396,11 @@ class PlanStepWorker(QObject):
             self._step,
             f"Retry не помог за {max_rounds + 1} раундов: {last_error}",
         )
+
+    def _full_retry_prompt(self) -> str:
+        """Свежий prompt после пересборки контекста (full retry)."""
+        fresh_context = self._build_context()
+        return self._build_prompt(fresh_context)
 
     def _apply_with_context(self, response: str, patch_ctx: dict) -> str:
         import inspect
