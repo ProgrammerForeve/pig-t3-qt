@@ -101,11 +101,11 @@ def test_max_nodes_prunes_rolled_back(tmp_path):
     mgr = HistoryTreeManager(str(tmp_path), max_nodes=3)
     mgr.apply("1", [])
     mgr.apply("2", [])
-    mgr.apply("3", [])
+    n3 = mgr.apply("3", [])
     mgr.undo()
     mgr.apply("4", [])
-    mgr.apply("5", [])
-    assert len(mgr.nodes) <= 3
+    # node3 — rolled_back и вне пути к current → prune удалил
+    assert n3 not in mgr.nodes
 
 
 def test_max_nodes_keeps_path_to_current(tmp_path):
@@ -132,10 +132,10 @@ def test_delete_node_with_children_requires_cascade(tmp_path):
     import pytest
 
     mgr = HistoryTreeManager(str(tmp_path))
-    mgr.apply("1", [])
-    n2 = mgr.apply("2", [])
+    n1 = mgr.apply("1", [])
+    mgr.apply("2", [])  # n2 — ребёнок n1
     with pytest.raises(ValueError, match="cascade"):
-        mgr.delete_node(n2)
+        mgr.delete_node(n1)
 
 
 def test_delete_node_cascade(tmp_path):
@@ -148,3 +148,35 @@ def test_delete_node_cascade(tmp_path):
     assert n2 not in mgr.nodes
     assert n3 not in mgr.nodes
     assert mgr.current is None
+
+
+# ---------- clear_rolled_back ----------
+
+
+def test_clear_rolled_back_empty(tmp_path):
+    mgr = HistoryTreeManager(str(tmp_path))
+    mgr.apply("1", [])
+    assert mgr.clear_rolled_back() == 0
+
+
+def test_clear_rolled_back_removes(tmp_path):
+    mgr = HistoryTreeManager(str(tmp_path))
+    mgr.apply("1", [])
+    mgr.apply("2", [])
+    mgr.undo()
+    n3 = mgr.apply("3", [])
+    removed = mgr.clear_rolled_back()
+    assert removed == 1
+    assert n3 in mgr.nodes
+
+
+def test_clear_rolled_back_keeps_current_path(tmp_path):
+    mgr = HistoryTreeManager(str(tmp_path))
+    a = mgr.apply("a", [])
+    mgr.apply("b", [])
+    mgr.apply("c", [])
+    mgr.undo()
+    mgr.undo()
+    mgr.clear_rolled_back()
+    assert mgr.current == a
+    assert a in mgr.nodes

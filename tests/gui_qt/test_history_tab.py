@@ -111,8 +111,7 @@ def test_tab_set_path_reloads(qtbot, tmp_path):
     assert "Нод: 2" in tab.status_label.text()
 
 
-def test_tab_buttons_disabled(qtbot, tmp_path):
-    _make_tree(tmp_path)
+def test_tab_buttons_exist(qtbot, tmp_path):
     tab = HistoryTab({"root_folder": str(tmp_path)})
     qtbot.addWidget(tab)
     for btn in (
@@ -120,9 +119,34 @@ def test_tab_buttons_disabled(qtbot, tmp_path):
         tab.btn_branch,
         tab.btn_redo,
         tab.btn_delete,
+        tab.btn_prune,
+    ):
+        assert btn is not None
+        assert btn.toolTip()
+
+
+def test_tab_buttons_disabled_on_empty(qtbot, tmp_path):
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    for btn in (
+        tab.btn_rollback,
+        tab.btn_branch,
+        tab.btn_redo,
+        tab.btn_delete,
+        tab.btn_prune,
     ):
         assert not btn.isEnabled()
-        assert "ADR-015" in btn.toolTip()
+
+
+def test_tab_buttons_state_on_populated(qtbot, tmp_path):
+    _make_tree(tmp_path, n=2)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    assert tab.btn_rollback.isEnabled()
+    assert tab.btn_branch.isEnabled()
+    assert tab.btn_delete.isEnabled()
+    assert not tab.btn_redo.isEnabled()
+    assert not tab.btn_prune.isEnabled()
 
 
 def test_tab_selection_shows_details(qtbot, tmp_path):
@@ -237,6 +261,43 @@ def test_delete_button_with_confirm(qtbot, tmp_path, monkeypatch):
     tab.tree_view.setCurrentIndex(root_idx)
     tab.btn_delete.click()
     assert len(tab._manager.nodes) == 0
+
+
+def test_prune_button_enabled_when_rolled_back_exists(qtbot, tmp_path):
+    _make_tree(tmp_path, n=2)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    assert not tab.btn_prune.isEnabled()
+    tab.btn_rollback.click()
+    assert tab.btn_prune.isEnabled()
+
+
+def test_prune_button_removes_rolled_back(qtbot, tmp_path):
+    _make_tree(tmp_path, n=2)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    tab.btn_rollback.click()
+    n_before = len(tab._manager.nodes)
+    tab.btn_prune.click()
+    assert len(tab._manager.nodes) < n_before
+
+
+def test_badge_shown_over_threshold(qtbot, tmp_path):
+    from PIG_T3.core.history_tree import HistoryTreeManager
+
+    mgr = HistoryTreeManager(str(tmp_path))
+    for i in range(201):
+        mgr.apply(f"step {i}", [])
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    assert tab.badge.text() != ""
+
+
+def test_badge_hidden_under_threshold(qtbot, tmp_path):
+    _make_tree(tmp_path, n=3)
+    tab = HistoryTab({"root_folder": str(tmp_path)})
+    qtbot.addWidget(tab)
+    assert tab.badge.text() == ""
 
 
 def test_delete_button_rejected(qtbot, tmp_path, monkeypatch):

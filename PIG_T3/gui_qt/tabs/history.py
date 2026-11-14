@@ -37,6 +37,8 @@ from ..models.history_tree_model import HistoryTreeModel
 
 log = logging.getLogger("pig_t3.gui_qt.tabs.history")
 
+_HISTORY_PRUNE_THRESHOLD = 200
+
 
 def _read_text(path: str) -> str:
     try:
@@ -82,11 +84,16 @@ class HistoryTab(QWidget):
         self.btn_branch.setToolTip("Сделать выбранную ноду current; следующий apply пойдёт от неё")
         self.btn_delete = QPushButton("🗑 Удалить")
         self.btn_delete.setToolTip("Удалить выбранную ноду и её детей")
+        self.btn_prune = QPushButton("🧹 Prune")
+        self.btn_prune.setToolTip("Удалить все rolled_back ноды вне пути к current")
+        self.badge = QLabel("")
+        self.badge.setStyleSheet("color: #e5c07b; font-weight: bold;")
         for btn in (
             self.btn_rollback,
             self.btn_redo,
             self.btn_branch,
             self.btn_delete,
+            self.btn_prune,
         ):
             btn.setEnabled(False)
         self.status_label = QLabel("Выберите папку проекта во вкладке Генератор")
@@ -95,7 +102,9 @@ class HistoryTab(QWidget):
         toolbar.addWidget(self.btn_redo)
         toolbar.addWidget(self.btn_branch)
         toolbar.addWidget(self.btn_delete)
+        toolbar.addWidget(self.btn_prune)
         toolbar.addStretch(1)
+        toolbar.addWidget(self.badge)
         toolbar.addWidget(self.status_label, 1)
         layout.addLayout(toolbar)
 
@@ -124,6 +133,7 @@ class HistoryTab(QWidget):
         self.btn_redo.clicked.connect(self._on_redo_clicked)
         self.btn_branch.clicked.connect(self._on_branch_clicked)
         self.btn_delete.clicked.connect(self._on_delete_clicked)
+        self.btn_prune.clicked.connect(self._on_prune_clicked)
         self.tree_view.selectionModel().currentRowChanged.connect(self._on_selection_changed)
 
     # ---------- Public ----------
@@ -190,6 +200,12 @@ class HistoryTab(QWidget):
         self.btn_redo.setEnabled(has_redo)
         self.btn_branch.setEnabled(has_selection)
         self.btn_delete.setEnabled(has_selection)
+        has_rolled_back = any(n.status == "rolled_back" for n in mgr.nodes.values())
+        self.btn_prune.setEnabled(has_rolled_back)
+        if len(mgr.nodes) > _HISTORY_PRUNE_THRESHOLD:
+            self.badge.setText(f"⚠️ История > {_HISTORY_PRUNE_THRESHOLD}")
+        else:
+            self.badge.setText("")
 
     # ---------- Handlers ----------
 
@@ -253,6 +269,15 @@ class HistoryTab(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", str(e))
             return
+        self.reload()
+
+    def _on_prune_clicked(self) -> None:
+        mgr = self._manager
+        if mgr is None:
+            return
+        count = mgr.clear_rolled_back()
+        if count:
+            self.status_label.setText(f"🧹 Удалено {count} rolled_back нод")
         self.reload()
 
     def _restore_backup(self, record: dict, which: str) -> None:

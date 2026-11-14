@@ -180,6 +180,36 @@ class HistoryTreeManager:
         self.save()
         return removed
 
+    def clear_rolled_back(self) -> int:
+        """Удалить все rolled_back ноды вне пути к current.
+
+        Возвращает число удалённых. Путь root→current защищён (иначе
+        undo перестанет работать).
+        """
+        protected: set[str] = set()
+        cur = self.current
+        while cur is not None and cur in self.nodes:
+            protected.add(cur)
+            cur = self.nodes[cur].parent
+        to_remove = [
+            nid
+            for nid, n in self.nodes.items()
+            if nid not in protected and n.status == "rolled_back"
+        ]
+        count = 0
+        for nid in to_remove:
+            node = self.nodes.pop(nid, None)
+            if node is None:
+                continue
+            count += 1
+            if node.parent and node.parent in self.nodes:
+                siblings = self.nodes[node.parent].children
+                if nid in siblings:
+                    siblings.remove(nid)
+        if count:
+            self.save()
+        return count
+
     def prune(self) -> int:
         """Публичный prune: удалить старые rolled_back ноды до max_nodes.
 

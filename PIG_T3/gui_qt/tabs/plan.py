@@ -724,12 +724,74 @@ class PlanTab(QWidget):
         self.progress_bar.setValue(percent)
         self.status_label.setText(f"{msg} ({percent}%)")
 
+    def _apply_with_history(self, llm_text: str) -> tuple[str, str, list[str]]:
+        """apply_llm_changes + before/after backup. → (log, patch_id, paths)."""
+        import json as _json
+        import uuid as _uuid
+
+        from ...core.patcher import clean_json_text as _clean
+        from ..workers.apply_worker import (
+            _copy_paths,
+            _extract_paths_from_actions,
+            _filter_paths,
+        )
+
+        patch_id = str(_uuid.uuid4())
+        root = self._current_path
+        backup_root = os.path.join(root, ".pig", "backups", patch_id)
+        before = os.path.join(backup_root, "before")
+        after = os.path.join(backup_root, "after")
+
+        try:
+            data = _json.loads(_clean(llm_text))
+            raw_paths = _extract_paths_from_actions(data) if isinstance(data, list) else []
+            filtered = _filter_paths(raw_paths)
+        except Exception:
+            filtered = []
+
+        _copy_paths(root, before, filtered)
+        apply_log = apply_llm_changes(
+            llm_text,
+            root,
+            allow_command_execution=bool(self.settings.get("allow_command_execution", False)),
+            command_whitelist=self.settings.get("command_whitelist", ""),
+            command_default_timeout=int(self.settings.get("command_default_timeout", 120)),
+            command_allow_shell_operators=bool(self.settings.get("command_allow_shell_operators", False)),
+        )
+        _copy_paths(root, after, filtered)
+        return apply_log, patch_id, filtered
+
+    def _record_plan_history(self, step: dict, patch_id: str | None, paths: list[str]) -> None:
+        if not patch_id or not self._current_path:
+            return
+        try:
+            from ...core.history_tree import HistoryTreeManager
+
+            mgr = HistoryTreeManager(self._current_path)
+            mgr.apply(
+                action_summary=f"plan: {step.get('title', '')}",
+                files=list(paths),
+                source="plan",
+                backup_id=patch_id,
+                payload={"paths": list(paths)},
+            )
+        except Exception as e:
+            log.warning("plan history apply failed: %s", e)
+
     def _on_exec_done(self, step: dict, log: str) -> None:
         pending = step.pop("_pending_llm_text", None)
         # capture mode: применить после diff-подтверждения
         if pending and not self._apply_pending_with_diff(step, pending):
             self.status_label.setText("⏹ Изменения не применены")
             return
+
+        patch_ctx = step.pop("_patch_ctx", {})
+        if patch_ctx.get("patch_id"):
+            self._record_plan_history(
+                step,
+                patch_ctx.get("patch_id"),
+                patch_ctx.get("paths", []),
+            )
 
         idx = -1
         for i, s in enumerate(self.plan_data):
@@ -772,7 +834,7 @@ class PlanTab(QWidget):
             return False
 
         try:
-            apply_log = apply_llm_changes(llm_text, self._current_path)
+            apply_log, patch_id, filtered = self._apply_with_history(llm_text)
         except Exception as e:
             _show_error(self, "Ошибка применения", str(e))
             return False
@@ -781,6 +843,7 @@ class PlanTab(QWidget):
         step["status"] = "completed" if has_mark else "pending"
         if not step.get("report"):
             step["report"] = apply_log
+        self._record_plan_history(step, patch_id, filtered)
         return True
 
     def _on_exec_error(self, step: dict, msg: str) -> None:

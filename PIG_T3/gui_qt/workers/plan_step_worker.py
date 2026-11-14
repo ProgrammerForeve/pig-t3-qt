@@ -192,7 +192,30 @@ class PlanStepWorker(QObject):
         )
 
     def _default_apply(self, llm_text: str, root: str, *, patch_context=None) -> str:
-        return apply_llm_changes(
+        """Apply + before/after backup + patch_id в patch_context."""
+        import json as _json
+        import uuid as _uuid
+
+        from .apply_worker import (
+            _copy_paths,
+            _extract_paths_from_actions,
+            _filter_paths,
+        )
+
+        patch_id = str(_uuid.uuid4())
+        backup_root = os.path.join(root, ".pig", "backups", patch_id)
+        before = os.path.join(backup_root, "before")
+        after = os.path.join(backup_root, "after")
+
+        try:
+            data = _json.loads(clean_json_text(llm_text))
+            raw_paths = _extract_paths_from_actions(data) if isinstance(data, list) else []
+            filtered = _filter_paths(raw_paths)
+        except Exception:
+            filtered = []
+
+        _copy_paths(root, before, filtered)
+        apply_log = apply_llm_changes(
             llm_text,
             root,
             allow_command_execution=bool(self._settings.get("allow_command_execution", False)),
@@ -200,7 +223,15 @@ class PlanStepWorker(QObject):
             command_default_timeout=int(self._settings.get("command_default_timeout", 120)),
             command_allow_shell_operators=bool(self._settings.get("command_allow_shell_operators", False)),
             patch_context=patch_context,
+            backup_dir=backup_root,
         )
+        _copy_paths(root, after, filtered)
+
+        if patch_context is not None:
+            patch_context["patch_id"] = patch_id
+            patch_context["paths"] = filtered
+
+        return apply_log
 
     def _apply_mark_to_step(self, llm_response: str) -> bool:
         return apply_mark_to_step(self._step, llm_response)
@@ -309,6 +340,10 @@ class PlanStepWorker(QObject):
                 self._step["status"] = "completed" if has_mark else "pending"
                 if not self._step.get("report"):
                     self._step["report"] = "\n".join(full_log)
+                self._step["_patch_ctx"] = {
+                    "patch_id": patch_ctx.get("patch_id"),
+                    "paths": list(patch_ctx.get("paths", [])),
+                }
                 self.progress.emit(100, "Готово")
                 self.done.emit(self._step, "\n".join(full_log))
                 return
