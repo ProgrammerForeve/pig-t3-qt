@@ -3,6 +3,39 @@
 Все значимые изменения проекта PIG-T3. Формат вдохновлён
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.4.0] — 2026-11-14
+
+### Added
+
+- **ADR-014 (flow control)**: `id`, `depends_on`, `on_failure`
+  (`continue|abort|rollback`), `on_success` в JSON-патче. Топосортировка,
+  транзитивный skip, deadlock detection, rollback через `before/`.
+- **ADR-015 (history tree)**: `HistoryTreeManager` + `HistoryTab` —
+  git-like дерево истории с rollback/redo/branch/delete, prune UI,
+  фильтр по source, авто-наполнение из EditorTab и PlanTab.
+- **ADR-016 (multi-turn retry)**: `on_failure: "retry_with_context"`,
+  `read_lines` action, `build_retry_prompt`, 2-level retry в PlanTab
+  (🔧 retry_with_context → 🔄 full retry), read_lines UI в EditorTab.
+- **ADR-017 (run_command batch)**: `commands[]` XOR `command`,
+  `report_mode` (`summary`/`full`), `summarize_output`,
+  индекс упавшей команды в summary.
+
+### Fixed
+
+- `EditorTab._show_result_dialog`: F821 `record` undefined.
+- `plan_step_worker.py`: `log = ...` внутри triple-quoted промпта.
+- `rag/optimizer.py`: двойной `make_embeddings_backend`.
+- `context_optimizer.py`: дублированные поля.
+- `quality.py`: dead code после return.
+
+### Infrastructure
+
+- `docs/usage.md`, `CONTEXT.md` (глоссарий), `docs/TASKS-ADR.md`.
+- `pyproject.toml`: pytest/pytest-qt/pytest-timeout в dev-deps.
+- coverage floor 67% → 70%.
+
+---
+
 ## [Unreleased]
 
 ### Added
